@@ -1,0 +1,998 @@
+<?php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+function dcb_allowed_field_types(): array {
+    return array('text', 'email', 'date', 'time', 'number', 'select', 'checkbox', 'radio', 'yes_no');
+}
+
+function dcb_allowed_template_block_types(): array {
+    return array('heading', 'paragraph', 'divider', 'section_header', 'spacer', 'image_placeholder', 'info_row', 'labeled_value_row', 'two_column_row');
+}
+
+function dcb_parse_emails(string $emails): array {
+    $parts = array_map('trim', explode(',', strtolower($emails)));
+    $parts = array_values(array_filter(array_map('sanitize_email', $parts), static function ($email) {
+        return $email !== '';
+    }));
+    return array_values(array_unique($parts));
+}
+
+function dcb_normalize_options($options): array {
+    $out = array();
+    if (!is_array($options)) {
+        return $out;
+    }
+
+    foreach ($options as $key => $value) {
+        if (is_array($value)) {
+            continue;
+        }
+
+        if (is_int($key)) {
+            $label = sanitize_text_field((string) $value);
+            $opt_key = sanitize_key($label);
+            if ($opt_key === '') {
+                continue;
+            }
+            $out[$opt_key] = $label;
+            continue;
+        }
+
+        $opt_key = sanitize_key((string) $key);
+        $label = sanitize_text_field((string) $value);
+        if ($opt_key === '' || $label === '') {
+            continue;
+        }
+        $out[$opt_key] = $label;
+    }
+
+    return $out;
+}
+
+function dcb_normalize_condition(array $condition): ?array {
+    $field = sanitize_key((string) ($condition['field'] ?? ''));
+    $operator = sanitize_key((string) ($condition['operator'] ?? 'eq'));
+    $allowed = array('eq', 'neq', 'filled', 'not_filled', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte');
+    if ($field === '' || !in_array($operator, $allowed, true)) {
+        return null;
+    }
+
+    $out = array(
+        'field' => $field,
+        'operator' => $operator,
+    );
+
+    if (isset($condition['values']) && is_array($condition['values'])) {
+        $out['values'] = array_values(array_filter(array_map(static function ($v) {
+            return sanitize_text_field((string) $v);
+        }, $condition['values']), static function ($v) {
+            return $v !== '';
+        }));
+    } elseif (array_key_exists('value', $condition)) {
+        $out['value'] = sanitize_text_field((string) $condition['value']);
+    }
+
+    return $out;
+}
+
+function dcb_generate_block_id(): string {
+    try {
+        return 'blk_' . bin2hex(random_bytes(8));
+    } catch (Throwable $e) {
+        return 'blk_' . wp_generate_password(12, false, false);
+    }
+}
+
+function dcb_normalize_template_block(array $block): ?array {
+    $type = sanitize_key((string) ($block['type'] ?? 'paragraph'));
+    if (!in_array($type, dcb_allowed_template_block_types(), true)) {
+        return null;
+    }
+
+    $out = array('type' => $type);
+    $raw_block_id = sanitize_key((string) ($block['block_id'] ?? $block['id'] ?? ''));
+    if ($raw_block_id !== '') {
+        $out['block_id'] = $raw_block_id;
+    }
+
+    if (isset($block['text'])) {
+        $text = sanitize_textarea_field((string) $block['text']);
+        if ($text !== '') {
+            $out['text'] = $text;
+        }
+    }
+
+    if ($type === 'heading' || $type === 'section_header') {
+        $level = (int) ($block['level'] ?? ($type === 'heading' ? 2 : 3));
+        $out['level'] = min(6, max(1, $level));
+    }
+
+    if ($type === 'spacer') {
+        $height = (int) ($block['height'] ?? 20);
+        $out['height'] = min(120, max(8, $height));
+    }
+
+    if ($type === 'image_placeholder') {
+        $alt = sanitize_text_field((string) ($block['alt'] ?? 'Logo / Image'));
+        $out['alt'] = $alt !== '' ? $alt : 'Logo / Image';
+        $width = (int) ($block['width'] ?? 180);
+        $out['width'] = min(640, max(60, $width));
+        if (isset($block['image_url'])) {
+            $url = esc_url_raw((string) $block['image_url']);
+            if ($url !== '') {
+                $out['image_url'] = $url;
+            }
+        }
+    }
+
+    if ($type === 'info_row') {
+        $columns = isset($block['columns']) && is_array($block['columns']) ? $block['columns'] : array();
+        $clean_columns = array();
+        foreach ($columns as $column) {
+            if (!is_array($column)) {
+                continue;
+            }
+            $label = sanitize_text_field((string) ($column['label'] ?? ''));
+            $value = sanitize_text_field((string) ($column['value'] ?? ''));
+            if ($label === '' && $value === '') {
+                continue;
+            }
+            $clean_columns[] = array('label' => $label, 'value' => $value);
+        }
+        if (empty($clean_columns)) {
+            $clean_columns[] = array('label' => 'Label', 'value' => 'Value');
+        }
+        $out['columns'] = array_slice($clean_columns, 0, 4);
+    }
+
+    if ($type === 'labeled_value_row') {
+        $out['label'] = sanitize_text_field((string) ($block['label'] ?? 'Label')) ?: 'Label';
+        $out['value_text'] = sanitize_text_field((string) ($block['value_text'] ?? 'Value')) ?: 'Value';
+    }
+
+    if ($type === 'two_column_row') {
+        $out['left_text'] = sanitize_text_field((string) ($block['left_text'] ?? 'Left Column')) ?: 'Left Column';
+        $out['right_text'] = sanitize_text_field((string) ($block['right_text'] ?? 'Right Column')) ?: 'Right Column';
+    }
+
+    if (isset($block['source_page']) && is_numeric($block['source_page'])) {
+        $out['source_page'] = max(1, (int) $block['source_page']);
+    }
+    if (isset($block['source_text_snippet'])) {
+        $snippet = sanitize_text_field((string) $block['source_text_snippet']);
+        if ($snippet !== '') {
+            $out['source_text_snippet'] = $snippet;
+        }
+    }
+
+    return $out;
+}
+
+function dcb_ensure_template_blocks_have_ids(array $template_blocks): array {
+    $used = array();
+    $out = array();
+
+    foreach ($template_blocks as $idx => $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $clean = $block;
+        $candidate = sanitize_key((string) ($clean['block_id'] ?? ''));
+        if ($candidate === '' || isset($used[$candidate])) {
+            $candidate = 'blk_' . ($idx + 1);
+            if (isset($used[$candidate])) {
+                $candidate = dcb_generate_block_id();
+                while (isset($used[$candidate])) {
+                    $candidate = dcb_generate_block_id();
+                }
+            }
+        }
+
+        $clean['block_id'] = $candidate;
+        $used[$candidate] = true;
+        $out[] = $clean;
+    }
+
+    return $out;
+}
+
+function dcb_default_document_nodes(array $template_blocks, array $fields): array {
+    $out = array();
+    foreach ($template_blocks as $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $block_id = sanitize_key((string) ($block['block_id'] ?? ''));
+        if ($block_id === '') {
+            continue;
+        }
+        $out[] = array('type' => 'block', 'block_id' => $block_id);
+    }
+    foreach ($fields as $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $field_key = sanitize_key((string) ($field['key'] ?? ''));
+        if ($field_key === '') {
+            continue;
+        }
+        $out[] = array('type' => 'field', 'field_key' => $field_key);
+    }
+    return $out;
+}
+
+function dcb_resolve_document_nodes(array $document_nodes, array $template_blocks, array $fields): array {
+    $block_by_id = array();
+    $block_by_index = array_values($template_blocks);
+    foreach ($template_blocks as $i => $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $block_id = sanitize_key((string) ($block['block_id'] ?? ''));
+        if ($block_id !== '') {
+            $block_by_id[$block_id] = $i;
+        }
+    }
+
+    $field_by_key = array();
+    foreach ($fields as $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $field_key = sanitize_key((string) ($field['key'] ?? ''));
+        if ($field_key !== '') {
+            $field_by_key[$field_key] = true;
+        }
+    }
+
+    $resolved = array();
+    $warnings = array();
+    $migrated = 0;
+
+    foreach ($document_nodes as $node_index => $node) {
+        if (!is_array($node)) {
+            $warnings[] = sprintf('Node #%d is not an object.', $node_index + 1);
+            continue;
+        }
+
+        $type = sanitize_key((string) ($node['type'] ?? $node['node_type'] ?? ''));
+        if (!in_array($type, array('block', 'field'), true)) {
+            $warnings[] = sprintf('Node #%d has invalid type "%s".', $node_index + 1, $type !== '' ? $type : 'empty');
+            continue;
+        }
+
+        if ($type === 'block') {
+            $block_id = sanitize_key((string) ($node['block_id'] ?? $node['block_ref'] ?? ''));
+            $legacy_index = isset($node['block_index']) && is_numeric($node['block_index']) ? (int) $node['block_index'] : null;
+
+            if ($block_id === '' && $legacy_index !== null && $legacy_index >= 0 && isset($block_by_index[$legacy_index]) && is_array($block_by_index[$legacy_index])) {
+                $block_id = sanitize_key((string) ($block_by_index[$legacy_index]['block_id'] ?? ''));
+                if ($block_id !== '') {
+                    $migrated++;
+                }
+            }
+
+            if ($block_id === '' || !isset($block_by_id[$block_id])) {
+                $warnings[] = sprintf('Node #%d references missing block "%s".', $node_index + 1, $block_id !== '' ? $block_id : '');
+                $resolved[] = array('type' => 'block', 'block_id' => $block_id, 'block_index' => $legacy_index, 'resolved' => false);
+                continue;
+            }
+
+            $resolved[] = array('type' => 'block', 'block_id' => $block_id, 'block_index' => (int) $block_by_id[$block_id], 'resolved' => true);
+            continue;
+        }
+
+        $field_key = sanitize_key((string) ($node['field_key'] ?? $node['field'] ?? ''));
+        if ($field_key === '' || !isset($field_by_key[$field_key])) {
+            $warnings[] = sprintf('Node #%d references missing field "%s".', $node_index + 1, $field_key !== '' ? $field_key : '');
+            $resolved[] = array('type' => 'field', 'field_key' => $field_key, 'resolved' => false);
+            continue;
+        }
+
+        $resolved[] = array('type' => 'field', 'field_key' => $field_key, 'resolved' => true);
+    }
+
+    return array(
+        'nodes' => $resolved,
+        'warnings' => $warnings,
+        'migrated_legacy_block_indexes' => $migrated,
+    );
+}
+
+function dcb_normalize_document_nodes($nodes, array $template_blocks, array $fields): array {
+    if (!is_array($nodes)) {
+        return array();
+    }
+
+    $resolved = dcb_resolve_document_nodes($nodes, $template_blocks, $fields);
+    $out = array();
+    foreach ((array) ($resolved['nodes'] ?? array()) as $node) {
+        if (!is_array($node)) {
+            continue;
+        }
+        $type = sanitize_key((string) ($node['type'] ?? ''));
+        if ($type === 'block') {
+            $entry = array('type' => 'block', 'block_id' => sanitize_key((string) ($node['block_id'] ?? '')));
+            if (isset($node['block_index']) && is_numeric($node['block_index'])) {
+                $entry['block_index'] = max(0, (int) $node['block_index']);
+            }
+            $out[] = $entry;
+            continue;
+        }
+        if ($type === 'field') {
+            $out[] = array('type' => 'field', 'field_key' => sanitize_key((string) ($node['field_key'] ?? '')));
+        }
+    }
+
+    return $out;
+}
+
+function dcb_normalize_ocr_meta($meta): array {
+    if (!is_array($meta)) {
+        return array();
+    }
+    $out = array();
+    if (isset($meta['page_number']) && is_numeric($meta['page_number'])) {
+        $out['page_number'] = max(1, (int) $meta['page_number']);
+    }
+    if (isset($meta['source_text_snippet'])) {
+        $out['source_text_snippet'] = sanitize_text_field((string) $meta['source_text_snippet']);
+    }
+    if (isset($meta['confidence_bucket'])) {
+        $bucket = sanitize_key((string) $meta['confidence_bucket']);
+        if (in_array($bucket, array('low', 'medium', 'high'), true)) {
+            $out['confidence_bucket'] = $bucket;
+        }
+    }
+    if (isset($meta['confidence_score']) && is_numeric($meta['confidence_score'])) {
+        $score = (float) $meta['confidence_score'];
+        $out['confidence_score'] = round(max(0, min(1, $score)), 4);
+    }
+    foreach (array('suggested_type', 'signal', 'source_engine', 'source_text') as $key) {
+        if (isset($meta[$key])) {
+            $value = $key === 'source_text' ? sanitize_text_field((string) $meta[$key]) : sanitize_key((string) $meta[$key]);
+            if ($value !== '') {
+                $out[$key] = $value;
+            }
+        }
+    }
+    if (isset($meta['warning_state'])) {
+        $warning = sanitize_key((string) $meta['warning_state']);
+        if (in_array($warning, array('none', 'review_needed', 'ambiguous', 'duplicate_guess'), true)) {
+            $out['warning_state'] = $warning;
+        }
+    }
+    if (isset($meta['review_state'])) {
+        $review = sanitize_key((string) $meta['review_state']);
+        if (in_array($review, array('pending', 'confirmed', 'ignored', 'merged'), true)) {
+            $out['review_state'] = $review;
+        }
+    }
+    return $out;
+}
+
+function dcb_normalize_ocr_candidates($candidates): array {
+    if (!is_array($candidates)) {
+        return array();
+    }
+
+    $out = array();
+    foreach ($candidates as $candidate) {
+        if (!is_array($candidate)) {
+            continue;
+        }
+        $row = array(
+            'field_label' => sanitize_text_field((string) ($candidate['field_label'] ?? '')),
+            'suggested_key' => sanitize_key((string) ($candidate['suggested_key'] ?? '')),
+            'suggested_type' => sanitize_key((string) ($candidate['suggested_type'] ?? 'text')),
+            'required_guess' => !empty($candidate['required_guess']),
+            'page_number' => max(1, (int) ($candidate['page_number'] ?? 1)),
+            'source_text_snippet' => sanitize_text_field((string) ($candidate['source_text_snippet'] ?? '')),
+            'confidence_bucket' => sanitize_key((string) ($candidate['confidence_bucket'] ?? 'low')),
+            'confidence_score' => isset($candidate['confidence_score']) && is_numeric($candidate['confidence_score']) ? round(max(0, min(1, (float) $candidate['confidence_score'])), 4) : 0,
+            'source_engine' => sanitize_key((string) ($candidate['source_engine'] ?? '')),
+            'warning_state' => sanitize_key((string) ($candidate['warning_state'] ?? 'none')),
+        );
+
+        if ($row['field_label'] === '' || $row['suggested_key'] === '') {
+            continue;
+        }
+        if (!in_array($row['confidence_bucket'], array('low', 'medium', 'high'), true)) {
+            $row['confidence_bucket'] = 'low';
+        }
+
+        $out[] = $row;
+    }
+
+    return $out;
+}
+
+function dcb_normalize_ocr_review($review): array {
+    if (!is_array($review)) {
+        return array();
+    }
+    $out = array();
+    foreach (array('origin', 'created_at') as $key) {
+        if (isset($review[$key])) {
+            $out[$key] = $key === 'origin' ? sanitize_key((string) $review[$key]) : sanitize_text_field((string) $review[$key]);
+        }
+    }
+
+    if (isset($review['pipeline_stages']) && is_array($review['pipeline_stages'])) {
+        $stages = array_values(array_filter(array_map(static function ($stage) {
+            return sanitize_text_field((string) $stage);
+        }, $review['pipeline_stages']), static function ($stage) {
+            return $stage !== '';
+        }));
+        if (!empty($stages)) {
+            $out['pipeline_stages'] = $stages;
+        }
+    }
+
+    if (isset($review['field_confidence_counts']) && is_array($review['field_confidence_counts'])) {
+        $out['field_confidence_counts'] = array(
+            'low' => max(0, (int) ($review['field_confidence_counts']['low'] ?? 0)),
+            'medium' => max(0, (int) ($review['field_confidence_counts']['medium'] ?? 0)),
+            'high' => max(0, (int) ($review['field_confidence_counts']['high'] ?? 0)),
+        );
+    }
+
+    if (isset($review['template_block_count']) && is_numeric($review['template_block_count'])) {
+        $out['template_block_count'] = max(0, (int) $review['template_block_count']);
+    }
+
+    if (isset($review['page_extraction']) && is_array($review['page_extraction'])) {
+        $page_rows = array();
+        foreach ($review['page_extraction'] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $bucket = sanitize_key((string) ($row['confidence_bucket'] ?? 'low'));
+            if (!in_array($bucket, array('low', 'medium', 'high'), true)) {
+                $bucket = 'low';
+            }
+            $proxy = round(max(0, min(1, (float) ($row['confidence_proxy'] ?? 0))), 4);
+            $page_rows[] = array(
+                'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
+                'engine' => sanitize_text_field((string) ($row['engine'] ?? 'none')),
+                'text_length' => max(0, (int) ($row['text_length'] ?? 0)),
+                'confidence_proxy' => $proxy,
+                'confidence_bucket' => $bucket,
+            );
+        }
+        if (!empty($page_rows)) {
+            $out['page_extraction'] = $page_rows;
+        }
+    }
+
+    return $out;
+}
+
+function dcb_normalize_single_form(array $form): ?array {
+    $label = sanitize_text_field((string) ($form['label'] ?? ''));
+    $recipients = sanitize_text_field((string) ($form['recipients'] ?? ''));
+    $fields = isset($form['fields']) && is_array($form['fields']) ? $form['fields'] : array();
+    $allowed_types = dcb_allowed_field_types();
+
+    $normalized_fields = array();
+    foreach ($fields as $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+
+        $key = sanitize_key((string) ($field['key'] ?? ''));
+        $field_label = sanitize_text_field((string) ($field['label'] ?? ''));
+        $type = sanitize_key((string) ($field['type'] ?? 'text'));
+        if ($key === '' || $field_label === '') {
+            continue;
+        }
+        if (!in_array($type, $allowed_types, true)) {
+            $type = 'text';
+        }
+
+        $normalized = array(
+            'key' => $key,
+            'label' => $field_label,
+            'type' => $type,
+            'required' => !empty($field['required']),
+        );
+
+        if (array_key_exists('min', $field) && is_numeric($field['min'])) {
+            $normalized['min'] = (float) $field['min'];
+        }
+        if (array_key_exists('max', $field) && is_numeric($field['max'])) {
+            $normalized['max'] = (float) $field['max'];
+        }
+        if ($type === 'select' || $type === 'radio' || $type === 'yes_no') {
+            $normalized['options'] = dcb_normalize_options($field['options'] ?? array());
+        }
+
+        $conditions = isset($field['conditions']) && is_array($field['conditions']) ? $field['conditions'] : array();
+        $clean_conditions = array();
+        foreach ($conditions as $condition) {
+            if (!is_array($condition)) {
+                continue;
+            }
+            $clean = dcb_normalize_condition($condition);
+            if ($clean !== null) {
+                $clean_conditions[] = $clean;
+            }
+        }
+        if (!empty($clean_conditions)) {
+            $normalized['conditions'] = $clean_conditions;
+        }
+
+        $ocr_meta = dcb_normalize_ocr_meta($field['ocr_meta'] ?? array());
+        if (!empty($ocr_meta)) {
+            $normalized['ocr_meta'] = $ocr_meta;
+        }
+
+        $normalized_fields[] = $normalized;
+    }
+
+    $hard_stops = isset($form['hard_stops']) && is_array($form['hard_stops']) ? $form['hard_stops'] : array();
+    $normalized_hard_stops = array();
+    foreach ($hard_stops as $stop) {
+        if (!is_array($stop)) {
+            continue;
+        }
+        $message = sanitize_text_field((string) ($stop['message'] ?? ''));
+        $when = isset($stop['when']) && is_array($stop['when']) ? $stop['when'] : array();
+        if ($message === '' || empty($when)) {
+            continue;
+        }
+        $clean_when = array();
+        foreach ($when as $condition) {
+            if (!is_array($condition)) {
+                continue;
+            }
+            $clean = dcb_normalize_condition($condition);
+            if ($clean !== null) {
+                $clean_when[] = $clean;
+            }
+        }
+        if (!empty($clean_when)) {
+            $normalized_hard_stops[] = array('message' => $message, 'when' => $clean_when);
+        }
+    }
+
+    if ($label === '' && empty($normalized_fields) && $recipients === '' && empty($normalized_hard_stops)) {
+        return null;
+    }
+
+    $raw_blocks = isset($form['template_blocks']) && is_array($form['template_blocks']) ? $form['template_blocks'] : array();
+    $template_blocks = array();
+    foreach ($raw_blocks as $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $clean_block = dcb_normalize_template_block($block);
+        if ($clean_block !== null) {
+            $template_blocks[] = $clean_block;
+        }
+    }
+    $template_blocks = dcb_ensure_template_blocks_have_ids($template_blocks);
+
+    $version = isset($form['version']) && is_numeric($form['version']) ? (int) $form['version'] : 1;
+    if ($version < 1) {
+        $version = 1;
+    }
+
+    $normalized_form = array(
+        'label' => $label,
+        'recipients' => $recipients,
+        'version' => $version,
+        'template_blocks' => $template_blocks,
+        'fields' => $normalized_fields,
+        'hard_stops' => $normalized_hard_stops,
+    );
+
+    $raw_document_nodes = isset($form['document_nodes']) && is_array($form['document_nodes']) ? $form['document_nodes'] : array();
+    $resolved_nodes = dcb_resolve_document_nodes($raw_document_nodes, $template_blocks, $normalized_fields);
+    $document_nodes = dcb_normalize_document_nodes($raw_document_nodes, $template_blocks, $normalized_fields);
+    if (!empty($document_nodes) || array_key_exists('document_nodes', $form)) {
+        $normalized_form['document_nodes'] = $document_nodes;
+    }
+    if (!empty($resolved_nodes['warnings'])) {
+        $normalized_form['document_node_warnings'] = array_values(array_map('sanitize_text_field', (array) $resolved_nodes['warnings']));
+    }
+
+    $ocr_candidates = dcb_normalize_ocr_candidates($form['ocr_candidates'] ?? array());
+    if (!empty($ocr_candidates)) {
+        $normalized_form['ocr_candidates'] = $ocr_candidates;
+    }
+
+    $ocr_review = dcb_normalize_ocr_review($form['ocr_review'] ?? array());
+    if (!empty($ocr_review)) {
+        $normalized_form['ocr_review'] = $ocr_review;
+    }
+
+    return $normalized_form;
+}
+
+function dcb_structural_signature_payload(array $form): array {
+    $clean_blocks = array();
+    foreach ((array) ($form['template_blocks'] ?? array()) as $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $entry = array('type' => sanitize_key((string) ($block['type'] ?? 'paragraph')));
+        $entry_block_id = sanitize_key((string) ($block['block_id'] ?? ''));
+        if ($entry_block_id !== '') {
+            $entry['block_id'] = $entry_block_id;
+        }
+        foreach (array('text', 'alt', 'image_url', 'label', 'value_text', 'left_text', 'right_text') as $text_key) {
+            if (isset($block[$text_key])) {
+                $entry[$text_key] = sanitize_text_field((string) $block[$text_key]);
+            }
+        }
+        foreach (array('level', 'height', 'width') as $num_key) {
+            if (isset($block[$num_key]) && is_numeric($block[$num_key])) {
+                $entry[$num_key] = (float) $block[$num_key];
+            }
+        }
+        if (isset($block['columns']) && is_array($block['columns'])) {
+            $entry['columns'] = array_values(array_map(static function ($col) {
+                return array(
+                    'label' => sanitize_text_field((string) ($col['label'] ?? '')),
+                    'value' => sanitize_text_field((string) ($col['value'] ?? '')),
+                );
+            }, $block['columns']));
+        }
+        $clean_blocks[] = $entry;
+    }
+    $clean_blocks = dcb_ensure_template_blocks_have_ids($clean_blocks);
+
+    $clean_fields = array();
+    foreach ((array) ($form['fields'] ?? array()) as $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $entry = array(
+            'key' => sanitize_key((string) ($field['key'] ?? '')),
+            'label' => sanitize_text_field((string) ($field['label'] ?? '')),
+            'type' => sanitize_key((string) ($field['type'] ?? 'text')),
+            'required' => !empty($field['required']),
+        );
+        if (isset($field['min']) && is_numeric($field['min'])) {
+            $entry['min'] = (float) $field['min'];
+        }
+        if (isset($field['max']) && is_numeric($field['max'])) {
+            $entry['max'] = (float) $field['max'];
+        }
+        if (isset($field['options']) && is_array($field['options'])) {
+            $entry['options'] = dcb_normalize_options($field['options']);
+        }
+        if (isset($field['conditions']) && is_array($field['conditions'])) {
+            $clean_conditions = array();
+            foreach ($field['conditions'] as $condition) {
+                if (!is_array($condition)) {
+                    continue;
+                }
+                $clean = dcb_normalize_condition($condition);
+                if ($clean !== null) {
+                    $clean_conditions[] = $clean;
+                }
+            }
+            if (!empty($clean_conditions)) {
+                $entry['conditions'] = $clean_conditions;
+            }
+        }
+        $clean_fields[] = $entry;
+    }
+
+    $clean_hard_stops = array();
+    foreach ((array) ($form['hard_stops'] ?? array()) as $stop) {
+        if (!is_array($stop)) {
+            continue;
+        }
+        $message = sanitize_text_field((string) ($stop['message'] ?? ''));
+        $when = array();
+        foreach ((array) ($stop['when'] ?? array()) as $condition) {
+            if (!is_array($condition)) {
+                continue;
+            }
+            $clean = dcb_normalize_condition($condition);
+            if ($clean !== null) {
+                $when[] = $clean;
+            }
+        }
+        if ($message === '' || empty($when)) {
+            continue;
+        }
+        $clean_hard_stops[] = array('message' => $message, 'when' => $when);
+    }
+
+    $clean_document_nodes = dcb_normalize_document_nodes($form['document_nodes'] ?? array(), $clean_blocks, $clean_fields);
+
+    return array(
+        'label' => sanitize_text_field((string) ($form['label'] ?? '')),
+        'recipients' => sanitize_text_field((string) ($form['recipients'] ?? '')),
+        'template_blocks' => $clean_blocks,
+        'document_nodes' => $clean_document_nodes,
+        'fields' => $clean_fields,
+        'hard_stops' => $clean_hard_stops,
+    );
+}
+
+function dcb_form_structure_signature(array $form): string {
+    return hash('sha256', wp_json_encode(dcb_structural_signature_payload($form)));
+}
+
+function dcb_apply_versioning(array $incoming_form, ?array $existing_form): array {
+    $incoming_version = isset($incoming_form['version']) ? (int) $incoming_form['version'] : 1;
+    if ($incoming_version < 1) {
+        $incoming_version = 1;
+    }
+
+    if ($existing_form === null) {
+        $incoming_form['version'] = $incoming_version;
+        return $incoming_form;
+    }
+
+    $existing_version = isset($existing_form['version']) ? (int) $existing_form['version'] : 1;
+    if ($existing_version < 1) {
+        $existing_version = 1;
+    }
+
+    $incoming_sig = dcb_form_structure_signature($incoming_form);
+    $existing_sig = dcb_form_structure_signature($existing_form);
+
+    $incoming_form['version'] = $incoming_sig !== $existing_sig ? ($existing_version + 1) : $existing_version;
+    return $incoming_form;
+}
+
+function dcb_get_custom_forms(): array {
+    $raw = get_option('dcb_forms_custom', array());
+    if (!is_array($raw)) {
+        return array();
+    }
+
+    $out = array();
+    foreach ($raw as $form_key => $form) {
+        if (!is_array($form)) {
+            continue;
+        }
+        $key = sanitize_key((string) $form_key);
+        if ($key === '') {
+            continue;
+        }
+        $normalized = dcb_normalize_single_form($form);
+        if ($normalized !== null) {
+            $out[$key] = $normalized;
+        }
+    }
+
+    return $out;
+}
+
+function dcb_form_definitions(bool $for_js = false): array {
+    $forms = dcb_get_custom_forms();
+
+    if (!$for_js) {
+        return $forms;
+    }
+
+    $out = array();
+    foreach ($forms as $key => $form) {
+        $out[$key] = array(
+            'label' => (string) ($form['label'] ?? $key),
+            'recipients' => (string) ($form['recipients'] ?? ''),
+            'version' => max(1, (int) ($form['version'] ?? 1)),
+            'templateBlocks' => isset($form['template_blocks']) && is_array($form['template_blocks']) ? array_values($form['template_blocks']) : array(),
+            'documentNodes' => isset($form['document_nodes']) && is_array($form['document_nodes']) ? array_values($form['document_nodes']) : array(),
+            'documentNodeWarnings' => isset($form['document_node_warnings']) && is_array($form['document_node_warnings']) ? array_values($form['document_node_warnings']) : array(),
+            'fields' => array_values(array_map(static function ($field) {
+                return array(
+                    'key' => (string) ($field['key'] ?? ''),
+                    'label' => (string) ($field['label'] ?? ''),
+                    'type' => (string) ($field['type'] ?? 'text'),
+                    'required' => !empty($field['required']),
+                    'options' => isset($field['options']) && is_array($field['options']) ? $field['options'] : array(),
+                    'min' => isset($field['min']) ? (float) $field['min'] : null,
+                    'max' => isset($field['max']) ? (float) $field['max'] : null,
+                    'conditions' => isset($field['conditions']) && is_array($field['conditions']) ? $field['conditions'] : array(),
+                    'ocr_meta' => isset($field['ocr_meta']) && is_array($field['ocr_meta']) ? $field['ocr_meta'] : array(),
+                );
+            }, (array) ($form['fields'] ?? array()))),
+            'hardStops' => isset($form['hard_stops']) && is_array($form['hard_stops']) ? $form['hard_stops'] : array(),
+            'ocrReview' => isset($form['ocr_review']) && is_array($form['ocr_review']) ? $form['ocr_review'] : array(),
+        );
+    }
+
+    return $out;
+}
+
+function dcb_condition_matches(array $condition, array $values): bool {
+    $field = sanitize_key((string) ($condition['field'] ?? ''));
+    $operator = sanitize_key((string) ($condition['operator'] ?? 'eq'));
+    $left = isset($values[$field]) ? (string) $values[$field] : '';
+    $value = isset($condition['value']) ? (string) $condition['value'] : '';
+    $value_list = isset($condition['values']) && is_array($condition['values']) ? array_map('strval', $condition['values']) : array();
+
+    switch ($operator) {
+        case 'filled':
+            return trim($left) !== '';
+        case 'not_filled':
+            return trim($left) === '';
+        case 'neq':
+            return $left !== $value;
+        case 'in':
+            return in_array($left, $value_list, true);
+        case 'not_in':
+            return !in_array($left, $value_list, true);
+        case 'gt':
+            return is_numeric($left) && is_numeric($value) && (float) $left > (float) $value;
+        case 'gte':
+            return is_numeric($left) && is_numeric($value) && (float) $left >= (float) $value;
+        case 'lt':
+            return is_numeric($left) && is_numeric($value) && (float) $left < (float) $value;
+        case 'lte':
+            return is_numeric($left) && is_numeric($value) && (float) $left <= (float) $value;
+        case 'eq':
+        default:
+            return $left === $value;
+    }
+}
+
+function dcb_field_is_visible(array $field, array $values): bool {
+    $conditions = isset($field['conditions']) && is_array($field['conditions']) ? $field['conditions'] : array();
+    if (empty($conditions)) {
+        return true;
+    }
+    foreach ($conditions as $condition) {
+        if (is_array($condition) && !dcb_condition_matches($condition, $values)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function dcb_apply_generic_hard_stops(array $form, array $clean, array $raw): array {
+    $errors = array();
+    $stops = isset($form['hard_stops']) && is_array($form['hard_stops']) ? $form['hard_stops'] : array();
+    if (empty($stops)) {
+        return $errors;
+    }
+
+    $values = array();
+    foreach ($raw as $k => $v) {
+        $values[sanitize_key((string) $k)] = is_scalar($v) ? (string) $v : '';
+    }
+    foreach ($clean as $k => $v) {
+        $values[sanitize_key((string) $k)] = is_scalar($v) ? (string) $v : '';
+    }
+
+    foreach ($stops as $stop) {
+        if (!is_array($stop)) {
+            continue;
+        }
+        $message = sanitize_text_field((string) ($stop['message'] ?? ''));
+        $when = isset($stop['when']) && is_array($stop['when']) ? $stop['when'] : array();
+        if ($message === '' || empty($when)) {
+            continue;
+        }
+        $matched = true;
+        foreach ($when as $condition) {
+            if (is_array($condition) && !dcb_condition_matches($condition, $values)) {
+                $matched = false;
+                break;
+            }
+        }
+        if ($matched) {
+            $errors[] = $message;
+        }
+    }
+
+    return $errors;
+}
+
+function dcb_validate_value(array $field, $value): array {
+    $key = (string) ($field['key'] ?? 'field');
+    $label = (string) ($field['label'] ?? $key);
+    $type = (string) ($field['type'] ?? 'text');
+    $required = !empty($field['required']);
+
+    if (is_array($value)) {
+        $value = '';
+    }
+    $value = trim((string) $value);
+
+    if ($type === 'checkbox') {
+        $checked = in_array($value, array('1', 'true', 'on', 'yes'), true);
+        if ($required && !$checked) {
+            return array('ok' => false, 'error' => $label . ' is required.');
+        }
+        return array('ok' => true, 'value' => $checked ? '1' : '');
+    }
+
+    if ($required && $value === '') {
+        return array('ok' => false, 'error' => $label . ' is required.');
+    }
+    if ($value === '') {
+        return array('ok' => true, 'value' => '');
+    }
+
+    if ($type === 'email' && !is_email($value)) {
+        return array('ok' => false, 'error' => $label . ' must be a valid email.');
+    }
+
+    if (in_array($type, array('select', 'radio', 'yes_no'), true)) {
+        $opts = isset($field['options']) && is_array($field['options']) ? array_map('strval', array_keys($field['options'])) : array();
+        if (($type === 'yes_no') && empty($opts)) {
+            $opts = array('yes', 'no');
+        }
+        if (!empty($opts) && !in_array($value, $opts, true)) {
+            return array('ok' => false, 'error' => $label . ' has an invalid option selected.');
+        }
+    }
+
+    if ($type === 'number') {
+        if (!is_numeric($value)) {
+            return array('ok' => false, 'error' => $label . ' must be numeric.');
+        }
+        $num = (float) $value;
+        if (isset($field['min']) && $num < (float) $field['min']) {
+            return array('ok' => false, 'error' => $label . ' is below minimum allowed value.');
+        }
+        if (isset($field['max']) && $num > (float) $field['max']) {
+            return array('ok' => false, 'error' => $label . ' exceeds maximum allowed value.');
+        }
+        return array('ok' => true, 'value' => $num);
+    }
+
+    if ($type === 'date') {
+        $ts = strtotime($value);
+        if ($ts === false) {
+            return array('ok' => false, 'error' => $label . ' must be a valid date.');
+        }
+    }
+
+    if (isset($field['max']) && is_numeric($field['max']) && strlen($value) > (int) $field['max'] && $type !== 'number') {
+        return array('ok' => false, 'error' => $label . ' is too long.');
+    }
+
+    return array('ok' => true, 'value' => sanitize_text_field($value));
+}
+
+function dcb_validate_submission(string $form_key, array $raw_values): array {
+    $forms = dcb_form_definitions(false);
+    if (!isset($forms[$form_key])) {
+        return array('ok' => false, 'errors' => array('Unknown form selected.'));
+    }
+
+    $form = $forms[$form_key];
+    $clean = array();
+    $errors = array();
+
+    foreach ((array) ($form['fields'] ?? array()) as $field) {
+        $key = (string) ($field['key'] ?? '');
+        if ($key === '') {
+            continue;
+        }
+
+        if (!dcb_field_is_visible($field, $raw_values)) {
+            $clean[$key] = '';
+            continue;
+        }
+
+        $result = dcb_validate_value($field, $raw_values[$key] ?? '');
+        if (empty($result['ok'])) {
+            $errors[] = (string) ($result['error'] ?? ($key . ' is invalid.'));
+        } else {
+            $clean[$key] = $result['value'] ?? '';
+        }
+    }
+
+    $errors = array_merge($errors, dcb_apply_generic_hard_stops($form, $clean, $raw_values));
+
+    return array(
+        'ok' => empty($errors),
+        'errors' => $errors,
+        'clean' => $clean,
+        'form' => $form,
+    );
+}

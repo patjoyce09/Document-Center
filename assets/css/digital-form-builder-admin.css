@@ -1,0 +1,15 @@
+.th-df-builder-root {
+  margin-top: 12px;
+  background: #fff;
+  border: 1px solid #d0d8e6;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.th-df-builder-loading {
+  color: #44526d;
+}
+
+.th-df-builder-root code {
+  font-size: 12px;
+}

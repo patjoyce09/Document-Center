@@ -1,0 +1,48 @@
+.th-df-wrap {
+  max-width: 960px;
+  margin: 18px auto;
+}
+
+.th-df-card {
+  background: #fff;
+  border: 1px solid #dbe3f0;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.th-df-label {
+  display: block;
+  margin: 10px 0 6px;
+  font-weight: 600;
+}
+
+.th-df-input,
+.th-df-select,
+.th-df-form select,
+.th-df-form input[type='text'],
+.th-df-form input[type='date'],
+.th-df-form textarea {
+  width: 100%;
+  max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #c8d3e6;
+}
+
+.th-df-actions {
+  margin-top: 16px;
+}
+
+.th-df-btn {
+  padding: 9px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: #1f57cc;
+  color: #fff;
+  cursor: pointer;
+}
+
+.th-df-errors {
+  margin-top: 12px;
+  color: #8a1d1d;
+}
