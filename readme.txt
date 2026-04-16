@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.0
+Stable tag: 0.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -39,6 +39,13 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.1 =
+* Added guarded boot tracing with per-step diagnostics persisted to `dcb_boot_trace`.
+* Added recovery dashboard instrumentation to surface the exact boot failure step/message.
+* Added safe mode and fatal shutdown guard to reduce lockout risk after runtime fatals.
+* Added fallback recovery routing for `admin.php?page=dcb-recovery-dashboard`.
+* Added admin menu collision mitigations and additional dashboard access links.
+
 = 0.3.0 =
 * Added plugin capability model: `dcb_manage_forms`, `dcb_review_submissions`, `dcb_manage_workflows`, `dcb_manage_settings`, `dcb_run_ocr_tools`.
 * Added reviewer queue admin screen with status filtering and workflow-focused UX.
