@@ -5,6 +5,10 @@ if (!defined('ABSPATH')) {
 }
 
 final class DCB_Workflow {
+    private const ACTION_REPLAY_OPTION = 'dcb_workflow_action_replay_tokens';
+    private const ACTION_AUDIT_OPTION = 'dcb_workflow_action_audit_log';
+    private const ACTION_AUDIT_SEQ_OPTION = 'dcb_workflow_action_audit_seq';
+
     public static function init(): void {
         add_action('add_meta_boxes', array(__CLASS__, 'register_meta_box'));
         add_action('admin_post_dcb_workflow_transition', array(__CLASS__, 'handle_transition'));
@@ -295,6 +299,56 @@ final class DCB_Workflow {
         return sha1((string) wp_json_encode(array($submission_id, $snapshot), JSON_UNESCAPED_SLASHES));
     }
 
+    public static function new_action_replay_token(): string {
+        return sanitize_key((string) wp_generate_uuid4());
+    }
+
+    public static function action_audit_rows(): array {
+        $rows = get_option(self::ACTION_AUDIT_OPTION, array());
+        return is_array($rows) ? $rows : array();
+    }
+
+    public static function action_audit_filtered(array $filters): array {
+        $rows = self::action_audit_rows();
+        $action_filter = sanitize_key((string) ($filters['action'] ?? ''));
+        $result_filter = sanitize_key((string) ($filters['result'] ?? ''));
+        $actor_filter = (int) ($filters['actor'] ?? 0);
+
+        $out = array();
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if ($action_filter !== '' && sanitize_key((string) ($row['action'] ?? '')) !== $action_filter) {
+                continue;
+            }
+            if ($result_filter !== '' && sanitize_key((string) ($row['result'] ?? '')) !== $result_filter) {
+                continue;
+            }
+            if ($actor_filter > 0 && (int) ($row['actor_user_id'] ?? 0) !== $actor_filter) {
+                continue;
+            }
+            $out[] = $row;
+        }
+
+        return array_reverse($out);
+    }
+
+    public static function action_audit_entry(int $audit_id): ?array {
+        if ($audit_id < 1) {
+            return null;
+        }
+        foreach (self::action_audit_rows() as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if ((int) ($row['id'] ?? 0) === $audit_id) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
     public static function queue_age_days(int $submission_id): int {
         $submitted_at = sanitize_text_field((string) get_post_meta($submission_id, '_dcb_form_submitted_at', true));
         $ts = $submitted_at !== '' ? strtotime($submitted_at) : false;
@@ -418,6 +472,71 @@ final class DCB_Workflow {
         return $summary;
     }
 
+    private static function consume_action_replay_token(string $token): bool {
+        $token = sanitize_key($token);
+        if ($token === '') {
+            return false;
+        }
+
+        $store = get_option(self::ACTION_REPLAY_OPTION, array());
+        if (!is_array($store)) {
+            $store = array();
+        }
+
+        $now = time();
+        $ttl = 2 * 3600;
+        foreach ($store as $key => $ts) {
+            if (!is_numeric($ts) || ((int) $ts + $ttl) < $now) {
+                unset($store[$key]);
+            }
+        }
+
+        if (isset($store[$token])) {
+            update_option(self::ACTION_REPLAY_OPTION, $store, false);
+            return false;
+        }
+
+        $store[$token] = $now;
+        if (count($store) > 500) {
+            asort($store, SORT_NUMERIC);
+            $store = array_slice($store, -500, null, true);
+        }
+
+        update_option(self::ACTION_REPLAY_OPTION, $store, false);
+        return true;
+    }
+
+    private static function record_action_audit(string $action, string $result, array $submission_ids, string $summary, array $details = array()): void {
+        $rows = get_option(self::ACTION_AUDIT_OPTION, array());
+        if (!is_array($rows)) {
+            $rows = array();
+        }
+
+        $seq = (int) get_option(self::ACTION_AUDIT_SEQ_OPTION, 0);
+        $seq = max(0, $seq) + 1;
+        update_option(self::ACTION_AUDIT_SEQ_OPTION, $seq, false);
+
+        $actor_id = (int) get_current_user_id();
+        $actor_user = $actor_id > 0 ? get_user_by('id', $actor_id) : null;
+        $rows[] = array(
+            'id' => $seq,
+            'time' => current_time('mysql'),
+            'action' => sanitize_key($action),
+            'result' => sanitize_key($result),
+            'actor_user_id' => $actor_id,
+            'actor_name' => $actor_user instanceof WP_User ? sanitize_text_field((string) $actor_user->display_name) : '',
+            'submission_ids' => array_values(array_filter(array_map('intval', $submission_ids), static function ($id) { return $id > 0; })),
+            'summary' => sanitize_text_field($summary),
+            'details' => is_array($details) ? $details : array(),
+        );
+
+        if (count($rows) > 250) {
+            $rows = array_slice($rows, -250);
+        }
+
+        update_option(self::ACTION_AUDIT_OPTION, $rows, false);
+    }
+
     public static function register_meta_box(): void {
         add_meta_box(
             'dcb-workflow-meta',
@@ -465,6 +584,7 @@ final class DCB_Workflow {
         wp_nonce_field('dcb_workflow_transition_' . $submission_id, 'dcb_workflow_nonce');
         echo '<input type="hidden" name="action" value="dcb_workflow_transition" />';
         echo '<input type="hidden" name="submission_id" value="' . esc_attr((string) $submission_id) . '" />';
+        echo '<input type="hidden" name="action_replay_token" value="' . esc_attr(self::new_action_replay_token()) . '" />';
 
         echo '<p><label for="dcb-workflow-next"><strong>Transition To</strong></label><br/>';
         echo '<select id="dcb-workflow-next" name="to_status" style="width:100%;">';
@@ -585,6 +705,18 @@ final class DCB_Workflow {
         $submission_id = isset($_POST['submission_id']) ? (int) $_POST['submission_id'] : 0;
         check_admin_referer('dcb_workflow_transition_' . $submission_id, 'dcb_workflow_nonce');
 
+        $replay_token = sanitize_key((string) ($_POST['action_replay_token'] ?? ''));
+        if (!self::consume_action_replay_token($replay_token)) {
+            self::record_action_audit('admin_transition', 'duplicate_ignored', array($submission_id), 'Duplicate workflow transition ignored.', array());
+            wp_safe_redirect(add_query_arg(array(
+                'post' => $submission_id,
+                'action' => 'edit',
+                'queue_notice' => rawurlencode(__('Duplicate action ignored (already processed).', 'document-center-builder')),
+                'queue_notice_type' => 'info',
+            ), admin_url('post.php')));
+            exit;
+        }
+
         $to_status = sanitize_key((string) ($_POST['to_status'] ?? ''));
         $assignee_user_id = isset($_POST['assignee_user_id']) ? (int) $_POST['assignee_user_id'] : 0;
         $assignee_role = sanitize_key((string) ($_POST['assignee_role'] ?? ''));
@@ -599,13 +731,18 @@ final class DCB_Workflow {
         if ($correction_request !== '') {
             self::add_note($submission_id, 'correction_request', $correction_request);
             self::set_status($submission_id, 'needs_correction', $correction_request);
+            self::record_action_audit('admin_transition', 'updated', array($submission_id), 'Correction request applied.', array('to_status' => 'needs_correction'));
         } elseif ($to_status !== '') {
             self::set_status($submission_id, $to_status, $note);
             if ($to_status === 'finalized') {
                 dcb_finalize_submission_output($submission_id, get_current_user_id());
             }
+            self::record_action_audit('admin_transition', 'updated', array($submission_id), 'Workflow transition applied.', array('to_status' => $to_status));
         } elseif ($note !== '') {
             self::add_note($submission_id, 'review_note', $note);
+            self::record_action_audit('admin_note', 'updated', array($submission_id), 'Review note added from workflow box.', array());
+        } else {
+            self::record_action_audit('admin_transition', 'no_change', array($submission_id), 'No workflow changes were applied.', array());
         }
 
         wp_safe_redirect(admin_url('post.php?post=' . $submission_id . '&action=edit'));
@@ -631,6 +768,18 @@ final class DCB_Workflow {
         }
 
         check_admin_referer('dcb_workflow_queue_action', 'dcb_workflow_queue_nonce');
+
+        $replay_token = sanitize_key((string) ($_POST['action_replay_token'] ?? ''));
+        if (!self::consume_action_replay_token($replay_token)) {
+            self::record_action_audit('queue_action', 'duplicate_ignored', array(), 'Duplicate queue action ignored.', array());
+            $redirect = add_query_arg(array(
+                'page' => 'dcb-review-queue',
+                'queue_notice' => rawurlencode(__('Duplicate action ignored (already processed).', 'document-center-builder')),
+                'queue_notice_type' => 'info',
+            ), admin_url('admin.php'));
+            wp_safe_redirect($redirect);
+            exit;
+        }
 
         $queue_action = sanitize_key((string) ($_POST['queue_action'] ?? ''));
         $submission_ids = array();
@@ -852,6 +1001,19 @@ final class DCB_Workflow {
             'notice' => implode(' ', $notice_parts),
         ));
 
+        $result_state = $changed > 0 ? 'updated' : 'no_change';
+        if ($stale_state > 0 || $invalid_transition > 0 || $invalid_assignee > 0 || $finalized_protected > 0 || $not_found > 0) {
+            $result_state = $changed > 0 ? 'partial' : 'failed';
+        }
+        self::record_action_audit('queue_' . $queue_action, $result_state, $submission_ids, implode(' ', $notice_parts), array(
+            'changed' => $changed,
+            'invalid_transition' => $invalid_transition,
+            'invalid_assignee' => $invalid_assignee,
+            'stale_state' => $stale_state,
+            'finalized_protected' => $finalized_protected,
+            'not_found' => $not_found,
+        ));
+
         return array(
             'message' => implode(' ', $notice_parts),
             'type' => $type,
@@ -976,10 +1138,24 @@ final class DCB_Workflow {
             }
         }
 
+        self::record_action_audit('classic_bulk_' . $target, $changed > 0 ? 'updated' : 'no_change', $post_ids, 'Classic submissions bulk workflow action processed.', array(
+            'changed' => $changed,
+            'target_status' => $target,
+        ));
+
         return add_query_arg(array('dcb_bulk_workflow_updated' => $changed), $redirect_to);
     }
 
     public static function bulk_action_notice(): void {
+        $is_queue_page = isset($_GET['page']) && sanitize_key((string) $_GET['page']) === 'dcb-review-queue';
+        if (!$is_queue_page && isset($_GET['queue_notice'])) {
+            $type = sanitize_key((string) ($_GET['queue_notice_type'] ?? 'info'));
+            if (!in_array($type, array('success', 'warning', 'error', 'info'), true)) {
+                $type = 'info';
+            }
+            echo '<div class="notice notice-' . esc_attr($type) . ' is-dismissible"><p>' . esc_html(sanitize_text_field((string) $_GET['queue_notice'])) . '</p></div>';
+        }
+
         if (!isset($_GET['dcb_bulk_workflow_updated'])) {
             return;
         }
@@ -1048,8 +1224,149 @@ final class DCB_Workflow {
 
         echo '<form method="get">';
         echo '<input type="hidden" name="page" value="dcb-review-queue" />';
+        echo '<input type="hidden" name="action_replay_token" value="' . esc_attr(self::new_action_replay_token()) . '" />';
         $table->display();
         echo '</form>';
+        echo '</div>';
+    }
+
+    public static function render_audit_page(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_WORKFLOWS)) {
+            wp_die('Unauthorized');
+        }
+
+        $filters = array(
+            'action' => isset($_GET['audit_action']) ? sanitize_key((string) $_GET['audit_action']) : '',
+            'result' => isset($_GET['audit_result']) ? sanitize_key((string) $_GET['audit_result']) : '',
+            'actor' => isset($_GET['audit_actor']) ? (int) $_GET['audit_actor'] : 0,
+        );
+        $rows = self::action_audit_filtered($filters);
+        $audit_view_id = isset($_GET['audit_view']) ? (int) $_GET['audit_view'] : 0;
+        $audit_view_entry = $audit_view_id > 0 ? self::action_audit_entry($audit_view_id) : null;
+
+        $known_actions = array();
+        foreach (self::action_audit_rows() as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $action = sanitize_key((string) ($row['action'] ?? ''));
+            if ($action !== '') {
+                $known_actions[$action] = $action;
+            }
+        }
+        ksort($known_actions);
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Workflow Action Audit Stream', 'document-center-builder') . '</h1>';
+        echo '<p class="description">' . esc_html__('Recent workflow and queue operations with outcomes and affected records.', 'document-center-builder') . '</p>';
+
+        echo '<form method="get" style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">';
+        echo '<input type="hidden" name="page" value="dcb-workflow-audit" />';
+        echo '<select name="audit_action">';
+        echo '<option value="">' . esc_html__('All actions', 'document-center-builder') . '</option>';
+        foreach ($known_actions as $action) {
+            echo '<option value="' . esc_attr($action) . '" ' . selected($filters['action'], $action, false) . '>' . esc_html($action) . '</option>';
+        }
+        echo '</select>';
+
+        echo '<select name="audit_result">';
+        echo '<option value="">' . esc_html__('All results', 'document-center-builder') . '</option>';
+        foreach (array('updated', 'partial', 'failed', 'no_change', 'duplicate_ignored') as $result) {
+            echo '<option value="' . esc_attr($result) . '" ' . selected($filters['result'], $result, false) . '>' . esc_html($result) . '</option>';
+        }
+        echo '</select>';
+
+        echo '<input type="number" min="0" name="audit_actor" value="' . esc_attr((string) ((int) $filters['actor'])) . '" placeholder="' . esc_attr__('Actor user ID', 'document-center-builder') . '" />';
+        submit_button(__('Filter', 'document-center-builder'), 'secondary', 'submit', false);
+        echo '</form>';
+
+        echo '<table class="widefat striped" style="max-width:1200px;">';
+        echo '<thead><tr><th>' . esc_html__('Time', 'document-center-builder') . '</th><th>' . esc_html__('Actor', 'document-center-builder') . '</th><th>' . esc_html__('Action', 'document-center-builder') . '</th><th>' . esc_html__('Result', 'document-center-builder') . '</th><th>' . esc_html__('Target', 'document-center-builder') . '</th><th>' . esc_html__('Summary', 'document-center-builder') . '</th><th>' . esc_html__('Inspect', 'document-center-builder') . '</th></tr></thead>';
+        echo '<tbody>';
+
+        if (empty($rows)) {
+            echo '<tr><td colspan="7">' . esc_html__('No audit entries found for the selected filters.', 'document-center-builder') . '</td></tr>';
+        } else {
+            foreach (array_slice($rows, 0, 150) as $row) {
+                $actor_id = (int) ($row['actor_user_id'] ?? 0);
+                $actor_name = sanitize_text_field((string) ($row['actor_name'] ?? ''));
+                $actor_display = $actor_name !== '' ? $actor_name : __('System', 'document-center-builder');
+                if ($actor_id > 0) {
+                    $actor_url = admin_url('user-edit.php?user_id=' . $actor_id);
+                    $actor_display = '<a href="' . esc_url($actor_url) . '">' . esc_html($actor_display . ' (#' . $actor_id . ')') . '</a>';
+                } else {
+                    $actor_display = esc_html($actor_display);
+                }
+                $target_ids = isset($row['submission_ids']) && is_array($row['submission_ids']) ? array_values(array_filter(array_map('intval', $row['submission_ids']), static function ($id) { return $id > 0; })) : array();
+                $target_bits = array();
+                foreach (array_slice($target_ids, 0, 6) as $submission_id) {
+                    $target_bits[] = '<a href="' . esc_url(admin_url('post.php?post=' . $submission_id . '&action=edit')) . '">#' . esc_html((string) $submission_id) . '</a>';
+                }
+                $target = empty($target_bits) ? '—' : implode(', ', $target_bits);
+                if (count($target_ids) > 6) {
+                    $target .= '…';
+                }
+
+                $result = sanitize_key((string) ($row['result'] ?? ''));
+                $badge_color = '#50575e';
+                if ($result === 'updated') {
+                    $badge_color = '#2271b1';
+                } elseif ($result === 'partial' || $result === 'no_change') {
+                    $badge_color = '#996800';
+                } elseif ($result === 'failed' || $result === 'duplicate_ignored') {
+                    $badge_color = '#b32d2e';
+                }
+
+                $view_link = add_query_arg(array(
+                    'page' => 'dcb-workflow-audit',
+                    'audit_action' => $filters['action'],
+                    'audit_result' => $filters['result'],
+                    'audit_actor' => (int) $filters['actor'],
+                    'audit_view' => (int) ($row['id'] ?? 0),
+                ), admin_url('admin.php'));
+
+                echo '<tr>';
+                echo '<td>' . esc_html(sanitize_text_field((string) ($row['time'] ?? ''))) . '</td>';
+                echo '<td>' . wp_kses_post($actor_display) . '</td>';
+                echo '<td>' . esc_html(sanitize_key((string) ($row['action'] ?? ''))) . '</td>';
+                echo '<td><span style="display:inline-block;padding:2px 8px;border-radius:10px;background:' . esc_attr($badge_color) . ';color:#fff;">' . esc_html($result) . '</span></td>';
+                echo '<td>' . wp_kses_post($target) . '</td>';
+                echo '<td>' . esc_html(sanitize_text_field((string) ($row['summary'] ?? ''))) . '</td>';
+                echo '<td><a class="button button-small" href="' . esc_url($view_link) . '">' . esc_html__('View', 'document-center-builder') . '</a></td>';
+                echo '</tr>';
+            }
+        }
+
+        echo '</tbody></table>';
+
+        if (is_array($audit_view_entry)) {
+            $entry_id = (int) ($audit_view_entry['id'] ?? 0);
+            $detail_json = wp_json_encode((array) ($audit_view_entry['details'] ?? array()), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+            if (!is_string($detail_json)) {
+                $detail_json = '{}';
+            }
+            $target_ids = isset($audit_view_entry['submission_ids']) && is_array($audit_view_entry['submission_ids']) ? array_values(array_filter(array_map('intval', $audit_view_entry['submission_ids']), static function ($id) { return $id > 0; })) : array();
+
+            echo '<hr/>';
+            echo '<h2>' . esc_html(sprintf(__('Audit Entry #%d', 'document-center-builder'), $entry_id)) . '</h2>';
+            echo '<p><strong>' . esc_html__('Action:', 'document-center-builder') . '</strong> ' . esc_html(sanitize_key((string) ($audit_view_entry['action'] ?? ''))) . ' | '
+                . '<strong>' . esc_html__('Result:', 'document-center-builder') . '</strong> ' . esc_html(sanitize_key((string) ($audit_view_entry['result'] ?? ''))) . ' | '
+                . '<strong>' . esc_html__('Time:', 'document-center-builder') . '</strong> ' . esc_html(sanitize_text_field((string) ($audit_view_entry['time'] ?? '')))
+                . '</p>';
+
+            if (!empty($target_ids)) {
+                $links = array();
+                foreach ($target_ids as $submission_id) {
+                    $links[] = '<a href="' . esc_url(admin_url('post.php?post=' . $submission_id . '&action=edit')) . '">#' . esc_html((string) $submission_id) . '</a>';
+                }
+                echo '<p><strong>' . esc_html__('Related submissions:', 'document-center-builder') . '</strong> ' . wp_kses_post(implode(', ', $links)) . '</p>';
+            }
+
+            echo '<p><strong>' . esc_html__('Summary:', 'document-center-builder') . '</strong> ' . esc_html(sanitize_text_field((string) ($audit_view_entry['summary'] ?? ''))) . '</p>';
+            echo '<p><strong>' . esc_html__('Details payload', 'document-center-builder') . '</strong></p>';
+            echo '<pre style="max-width:1200px;overflow:auto;background:#fff;border:1px solid #dcdcde;padding:10px;">' . esc_html($detail_json) . '</pre>';
+        }
+
         echo '</div>';
     }
 
@@ -1065,6 +1382,18 @@ final class DCB_Workflow {
         }
 
         check_admin_referer('bulk-dcb-review-queue');
+
+        $replay_token = sanitize_key((string) ($_REQUEST['action_replay_token'] ?? ''));
+        if (!self::consume_action_replay_token($replay_token)) {
+            self::record_action_audit('queue_bulk', 'duplicate_ignored', array(), 'Duplicate queue bulk action ignored.', array());
+            $redirect = add_query_arg(array(
+                'page' => 'dcb-review-queue',
+                'queue_notice' => rawurlencode(__('Duplicate action ignored (already processed).', 'document-center-builder')),
+                'queue_notice_type' => 'info',
+            ), admin_url('admin.php'));
+            wp_safe_redirect($redirect);
+            exit;
+        }
 
         $submission_ids = isset($_REQUEST['submission_ids']) && is_array($_REQUEST['submission_ids'])
             ? array_values(array_filter(array_map('intval', (array) $_REQUEST['submission_ids']), static function ($id) { return $id > 0; }))

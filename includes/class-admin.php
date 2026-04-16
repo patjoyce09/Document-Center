@@ -26,6 +26,7 @@ final class DCB_Admin {
         if (is_string($queue_hook) && $queue_hook !== '') {
             add_action('load-' . $queue_hook, array('DCB_Workflow', 'on_queue_page_load'));
         }
+        add_submenu_page('dcb-dashboard', __('Workflow Audit', 'document-center-builder'), __('Workflow Audit', 'document-center-builder'), DCB_Permissions::CAP_MANAGE_WORKFLOWS, 'dcb-workflow-audit', array('DCB_Workflow', 'render_audit_page'));
         add_submenu_page('dcb-dashboard', __('OCR Review Queue', 'document-center-builder'), __('OCR Review Queue', 'document-center-builder'), DCB_Permissions::CAP_RUN_OCR_TOOLS, 'edit.php?post_type=dcb_ocr_review_queue');
         add_submenu_page('dcb-dashboard', __('OCR Diagnostics', 'document-center-builder'), __('OCR Diagnostics', 'document-center-builder'), DCB_Permissions::CAP_RUN_OCR_TOOLS, 'dcb-ocr-diagnostics', array('DCB_OCR', 'render_diagnostics_page'));
         add_submenu_page('dcb-dashboard', __('Settings', 'document-center-builder'), __('Settings', 'document-center-builder'), DCB_Permissions::CAP_MANAGE_SETTINGS, 'dcb-settings', array('DCB_Diagnostics', 'render_settings_page'));

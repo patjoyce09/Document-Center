@@ -61,6 +61,7 @@ final class RuntimeLifecycleTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_nonce' => 'valid',
+            'action_replay_token' => 'toklife1',
             'submission_id' => $submissionId,
             'assignee_user_id' => 0,
             'assignee_role' => '',
@@ -95,6 +96,7 @@ final class RuntimeLifecycleTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_nonce' => 'valid',
+            'action_replay_token' => 'toklife2',
             'submission_id' => $submissionId,
             'to_status' => 'finalized',
             'assignee_user_id' => 0,
@@ -125,6 +127,7 @@ final class RuntimeLifecycleTest extends TestCase {
 
         $GLOBALS['dcb_current_caps']['dcb_manage_workflows'] = false;
         $_POST = array('submission_id' => $submissionId, 'dcb_workflow_nonce' => 'valid');
+        $_POST['action_replay_token'] = 'toklife3';
         $_REQUEST = $_POST;
 
         try {
@@ -137,6 +140,7 @@ final class RuntimeLifecycleTest extends TestCase {
 
         $GLOBALS['dcb_current_caps']['dcb_manage_workflows'] = true;
         $_POST = array('submission_id' => $submissionId, 'dcb_workflow_nonce' => 'invalid', 'to_status' => 'in_review');
+        $_POST['action_replay_token'] = 'toklife4';
         $_REQUEST = $_POST;
 
         try {

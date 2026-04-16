@@ -139,6 +139,12 @@ if (!function_exists('sanitize_textarea_field')) {
 if (!function_exists('sanitize_email')) {
     function sanitize_email($email) { return strtolower(trim((string) $email)); }
 }
+if (!function_exists('sanitize_file_name')) {
+    function sanitize_file_name($filename) {
+        $filename = preg_replace('/[^A-Za-z0-9\.\-_]+/', '-', (string) $filename);
+        return trim((string) $filename, '-');
+    }
+}
 if (!function_exists('sanitize_title')) {
     function sanitize_title($title) { return trim(strtolower(preg_replace('/[^a-zA-Z0-9_\-]+/', '-', (string) $title)), '-'); }
 }
@@ -447,8 +453,40 @@ if (!function_exists('dcb_upload_normalize_text')) {
 if (!function_exists('dcb_ocr_smoke_validation')) {
     function dcb_ocr_smoke_validation($diag = null) { return array('ok' => true, 'messages' => array('ok')); }
 }
+if (!function_exists('wp_handle_upload')) {
+    function wp_handle_upload($file, $overrides = array()) {
+        if (isset($GLOBALS['dcb_mock_upload_result']) && is_array($GLOBALS['dcb_mock_upload_result'])) {
+            return $GLOBALS['dcb_mock_upload_result'];
+        }
+
+        $tmp = isset($file['tmp_name']) ? (string) $file['tmp_name'] : '';
+        if ($tmp === '' || !file_exists($tmp)) {
+            return array('error' => 'upload failed');
+        }
+
+        $type = isset($file['type']) ? (string) $file['type'] : 'application/octet-stream';
+        return array('file' => $tmp, 'type' => $type);
+    }
+}
+if (!function_exists('dcb_parse_emails')) {
+    function dcb_parse_emails($raw) {
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return array();
+        }
+        return array($raw);
+    }
+}
+if (!function_exists('wp_mail')) {
+    function wp_mail($to, $subject, $message, $headers = '', $attachments = array()) { return true; }
+}
 if (!function_exists('wp_remote_request')) {
     function wp_remote_request($url, $args = array()) {
+        if (isset($GLOBALS['dcb_mock_remote_responses']) && is_array($GLOBALS['dcb_mock_remote_responses'])) {
+            if (!empty($GLOBALS['dcb_mock_remote_responses'])) {
+                return array_shift($GLOBALS['dcb_mock_remote_responses']);
+            }
+        }
         if (isset($GLOBALS['dcb_mock_remote_response'])) {
             return $GLOBALS['dcb_mock_remote_response'];
         }

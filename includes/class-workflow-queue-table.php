@@ -288,6 +288,7 @@ final class DCB_Workflow_Queue_Table extends WP_List_Table {
         if (!empty($allowed)) {
             $out .= '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-bottom:6px;">';
             wp_nonce_field('dcb_workflow_queue_action', 'dcb_workflow_queue_nonce');
+            $out .= '<input type="hidden" name="action_replay_token" value="' . esc_attr(DCB_Workflow::new_action_replay_token()) . '" />';
             $out .= '<input type="hidden" name="action" value="dcb_workflow_queue_action" />';
             $out .= '<input type="hidden" name="queue_action" value="quick_transition" />';
             $out .= '<input type="hidden" name="submission_id" value="' . esc_attr((string) $submission_id) . '" />';
@@ -307,6 +308,7 @@ final class DCB_Workflow_Queue_Table extends WP_List_Table {
 
         $out .= '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field('dcb_workflow_queue_action', 'dcb_workflow_queue_nonce');
+        $out .= '<input type="hidden" name="action_replay_token" value="' . esc_attr(DCB_Workflow::new_action_replay_token()) . '" />';
         $out .= '<input type="hidden" name="action" value="dcb_workflow_queue_action" />';
         $out .= '<input type="hidden" name="queue_action" value="quick_assign" />';
         $out .= '<input type="hidden" name="submission_id" value="' . esc_attr((string) $submission_id) . '" />';

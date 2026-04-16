@@ -97,4 +97,25 @@ final class RepositoryRuntimeTest extends TestCase {
         $first = (array) $rows[0];
         $this->assertArrayHasKey('issue', $first);
     }
+
+    public function testScheduledParityMonitorStoresDriftSummaryWhenMismatchExists(): void {
+        \update_option('dcb_forms_storage_mode', 'cpt');
+        \update_option('dcb_forms_custom', array(
+            'intake' => array('label' => 'Intake', 'version' => 1, 'fields' => array(array('key' => 'name', 'type' => 'text'))),
+        ));
+        \DCB_Form_Repository::save_all_raw(array(
+            'intake' => array('label' => 'Intake', 'version' => 2, 'fields' => array(array('key' => 'name', 'type' => 'textarea'))),
+        ));
+
+        $result = \DCB_Form_Repository::run_scheduled_parity_monitor();
+        $this->assertTrue((bool) ($result['ok'] ?? false));
+        $this->assertTrue((bool) ($result['drift_detected'] ?? false));
+
+        $last = (array) \get_option('dcb_forms_storage_drift_last', array());
+        $this->assertTrue((bool) ($last['drift_detected'] ?? false));
+        $this->assertArrayHasKey('summary', $last);
+
+        $log = (array) \get_option('dcb_forms_storage_drift_log', array());
+        $this->assertNotEmpty($log);
+    }
 }

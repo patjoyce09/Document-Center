@@ -811,15 +811,170 @@ function dcb_upload_extract_text_from_file_local(string $file_path, string $mime
 function dcb_upload_extract_text_from_file(string $file_path, string $mime): array {
     if (class_exists('DCB_OCR_Engine_Manager')) {
         $result = DCB_OCR_Engine_Manager::extract($file_path, $mime);
+        $result = dcb_ocr_canonicalize_result($result);
         $result = dcb_ocr_attach_legacy_meta($result);
         dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
         return $result;
     }
 
     $result = dcb_upload_extract_text_from_file_local($file_path, $mime);
+    $result = dcb_ocr_canonicalize_result($result);
     $result = dcb_ocr_attach_legacy_meta($result);
     dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
     return $result;
+}
+
+/**
+ * Canonical OCR result schema (source of truth for internal runtime/state storage).
+ *
+ * Shape:
+ * - text: string
+ * - normalized: string
+ * - engine_used: string
+ * - pages: [{page_number, engine, text, text_length, confidence_proxy, warnings[]}]
+ * - warnings: [{code, message}]
+ * - failure_reason: string
+ * - provider: string
+ * - confidence: float 0..1
+ * - timings: {total_ms, validation_ms, extraction_ms, normalization_ms}
+ * - provenance: {
+ *     mode, provider, provider_version, contract_version, request_id,
+ *     request_url, http_status, engine_used, warnings, failure_reason,
+ *     confidence, timings, timestamp, fallback_from?, fallback_reason?
+ *   }
+ *
+ * Legacy `ocr` envelope is generated separately as compatibility output only.
+ */
+function dcb_ocr_canonicalize_result(array $result): array {
+    $text = trim((string) ($result['text'] ?? ''));
+    $normalized = (string) ($result['normalized'] ?? '');
+    if ($normalized === '') {
+        $normalized = dcb_upload_normalize_text($text);
+    }
+
+    $engine_used = sanitize_text_field((string) ($result['engine_used'] ?? $result['engine'] ?? 'unknown'));
+    $provider = sanitize_text_field((string) ($result['provider'] ?? 'local'));
+    $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
+
+    $warnings = dcb_ocr_canonicalize_warnings(isset($result['warnings']) && is_array($result['warnings']) ? $result['warnings'] : array());
+    $pages = dcb_ocr_canonicalize_pages(isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array());
+
+    $confidence = 0.0;
+    if (isset($result['confidence']) && is_numeric($result['confidence'])) {
+        $confidence = (float) $result['confidence'];
+    } elseif (isset($result['confidence_proxy']) && is_numeric($result['confidence_proxy'])) {
+        $confidence = (float) $result['confidence_proxy'];
+    } elseif (!empty($pages)) {
+        $total = 0.0;
+        $count = 0;
+        foreach ($pages as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            $total += (float) ($page['confidence_proxy'] ?? 0.0);
+            $count++;
+        }
+        if ($count > 0) {
+            $confidence = $total / $count;
+        }
+    } else {
+        $confidence = dcb_text_confidence_proxy($text);
+    }
+    $confidence = round(max(0.0, min(1.0, $confidence)), 4);
+
+    $timings = isset($result['timings']) && is_array($result['timings']) ? $result['timings'] : array();
+    $timings = array(
+        'total_ms' => max(0, (int) ($timings['total_ms'] ?? 0)),
+        'validation_ms' => max(0, (int) ($timings['validation_ms'] ?? 0)),
+        'extraction_ms' => max(0, (int) ($timings['extraction_ms'] ?? 0)),
+        'normalization_ms' => max(0, (int) ($timings['normalization_ms'] ?? 0)),
+    );
+
+    $provenance = isset($result['provenance']) && is_array($result['provenance']) ? $result['provenance'] : array();
+    $provenance = array(
+        'mode' => sanitize_key((string) ($provenance['mode'] ?? ($provider === 'local' ? 'local' : 'remote'))),
+        'provider' => sanitize_text_field((string) ($provenance['provider'] ?? $provider)),
+        'provider_version' => sanitize_text_field((string) ($provenance['provider_version'] ?? '')),
+        'contract_version' => sanitize_text_field((string) ($provenance['contract_version'] ?? '')),
+        'request_id' => sanitize_text_field((string) ($provenance['request_id'] ?? '')),
+        'request_url' => esc_url_raw((string) ($provenance['request_url'] ?? '')),
+        'http_status' => max(0, (int) ($provenance['http_status'] ?? 0)),
+        'engine_used' => sanitize_text_field((string) ($provenance['engine_used'] ?? $engine_used)),
+        'warnings' => dcb_ocr_canonicalize_warnings(isset($provenance['warnings']) && is_array($provenance['warnings']) ? $provenance['warnings'] : $warnings),
+        'failure_reason' => sanitize_key((string) ($provenance['failure_reason'] ?? $failure_reason)),
+        'confidence' => isset($provenance['confidence']) && is_numeric($provenance['confidence']) ? round(max(0.0, min(1.0, (float) $provenance['confidence'])), 4) : $confidence,
+        'timings' => isset($provenance['timings']) && is_array($provenance['timings']) ? array(
+            'total_ms' => max(0, (int) ($provenance['timings']['total_ms'] ?? $timings['total_ms'])),
+            'validation_ms' => max(0, (int) ($provenance['timings']['validation_ms'] ?? $timings['validation_ms'])),
+            'extraction_ms' => max(0, (int) ($provenance['timings']['extraction_ms'] ?? $timings['extraction_ms'])),
+            'normalization_ms' => max(0, (int) ($provenance['timings']['normalization_ms'] ?? $timings['normalization_ms'])),
+        ) : $timings,
+        'timestamp' => sanitize_text_field((string) ($provenance['timestamp'] ?? current_time('mysql'))),
+    );
+
+    if (isset($provenance['fallback_from'])) {
+        $provenance['fallback_from'] = sanitize_key((string) $provenance['fallback_from']);
+    }
+    if (isset($provenance['fallback_reason'])) {
+        $provenance['fallback_reason'] = sanitize_key((string) $provenance['fallback_reason']);
+    }
+
+    $result['text'] = $text;
+    $result['normalized'] = $normalized;
+    $result['engine'] = $engine_used;
+    $result['engine_used'] = $engine_used;
+    $result['pages'] = $pages;
+    $result['warnings'] = $warnings;
+    $result['failure_reason'] = $failure_reason;
+    $result['provider'] = $provider;
+    $result['confidence'] = $confidence;
+    $result['confidence_proxy'] = $confidence;
+    $result['timings'] = $timings;
+    $result['provenance'] = $provenance;
+
+    return $result;
+}
+
+function dcb_ocr_canonicalize_warnings(array $warnings): array {
+    $clean = array();
+    foreach ($warnings as $warning) {
+        if (is_array($warning)) {
+            $clean[] = array(
+                'code' => sanitize_key((string) ($warning['code'] ?? 'ocr_warning')),
+                'message' => sanitize_text_field((string) ($warning['message'] ?? 'OCR warning')),
+            );
+            continue;
+        }
+
+        $msg = sanitize_text_field((string) $warning);
+        if ($msg !== '') {
+            $clean[] = array('code' => 'ocr_warning', 'message' => $msg);
+        }
+    }
+    return $clean;
+}
+
+function dcb_ocr_canonicalize_pages(array $pages): array {
+    $clean = array();
+    foreach ($pages as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $text = (string) ($page['text'] ?? $page['extracted_text'] ?? '');
+        $confidence = isset($page['confidence_proxy']) && is_numeric($page['confidence_proxy'])
+            ? (float) $page['confidence_proxy']
+            : dcb_text_confidence_proxy($text);
+
+        $clean[] = array(
+            'page_number' => max(1, (int) ($page['page_number'] ?? 1)),
+            'engine' => sanitize_text_field((string) ($page['engine'] ?? 'unknown')),
+            'text' => $text,
+            'text_length' => max(0, (int) ($page['text_length'] ?? strlen($text))),
+            'confidence_proxy' => round(max(0.0, min(1.0, $confidence)), 4),
+            'warnings' => dcb_ocr_canonicalize_warnings(isset($page['warnings']) && is_array($page['warnings']) ? $page['warnings'] : array()),
+        );
+    }
+    return $clean;
 }
 
 function dcb_ocr_attach_legacy_meta(array $result): array {

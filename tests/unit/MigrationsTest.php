@@ -17,10 +17,12 @@ final class MigrationsTest extends TestCase {
         $storageMode = (string) \get_option('dcb_forms_storage_mode', '');
         $dualRead = (string) \get_option('dcb_forms_storage_dual_read', '');
         $dualWrite = (string) \get_option('dcb_forms_storage_dual_write', '');
+        $monitorEnabled = (string) \get_option('dcb_forms_parity_monitor_enabled', '');
 
-        $this->assertGreaterThanOrEqual(5, $schemaVersion);
+        $this->assertGreaterThanOrEqual(6, $schemaVersion);
         $this->assertSame('option', $storageMode);
         $this->assertSame('1', $dualRead);
         $this->assertSame('0', $dualWrite);
+        $this->assertSame('1', $monitorEnabled);
     }
 }

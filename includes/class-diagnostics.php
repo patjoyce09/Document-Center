@@ -9,6 +9,8 @@ final class DCB_Diagnostics {
         add_action('admin_post_dcb_save_settings', array(__CLASS__, 'save_settings'));
         add_action('admin_post_dcb_run_storage_migration', array(__CLASS__, 'run_storage_migration'));
         add_action('admin_post_dcb_export_migration_report', array(__CLASS__, 'export_migration_report'));
+        add_action('admin_post_dcb_run_parity_check_now', array(__CLASS__, 'run_parity_check_now'));
+        add_action('admin_notices', array(__CLASS__, 'render_drift_warning_notice'));
     }
 
     public static function render_settings_page(): void {
@@ -83,6 +85,17 @@ final class DCB_Diagnostics {
         echo '<label><input type="checkbox" name="dcb_forms_storage_dual_write" value="1" ' . checked($dual_write_enabled, true, false) . ' /> When mode is not option, also write to option backend</label>';
         echo '</td></tr>';
 
+        $parity_monitor_enabled = $field('dcb_forms_parity_monitor_enabled') === '1';
+        echo '<tr><th scope="row">Parity Drift Monitor</th><td>';
+        echo '<label><input type="checkbox" name="dcb_forms_parity_monitor_enabled" value="1" ' . checked($parity_monitor_enabled, true, false) . ' /> Enable scheduled parity drift monitor</label>';
+        echo '</td></tr>';
+
+        $parity_alert_enabled = $field('dcb_forms_parity_alert_enabled') === '1';
+        echo '<tr><th scope="row">Critical Drift Email Alerts</th><td>';
+        echo '<label><input type="checkbox" name="dcb_forms_parity_alert_enabled" value="1" ' . checked($parity_alert_enabled, true, false) . ' /> Send email alerts on critical parity drift</label>';
+        echo '</td></tr>';
+        self::render_text_row('Parity Alert Email', 'dcb_forms_parity_alert_email', $field('dcb_forms_parity_alert_email'));
+
         $mapping_raw = wp_json_encode(get_option('dcb_tutor_mapping', array()), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if (!is_string($mapping_raw)) {
             $mapping_raw = '{}';
@@ -134,6 +147,10 @@ final class DCB_Diagnostics {
             $parity = isset($readiness['parity']) && is_array($readiness['parity']) ? $readiness['parity'] : array();
             $verification = isset($readiness['verification']) && is_array($readiness['verification']) ? $readiness['verification'] : array();
             $verification_summary = isset($verification['summary']) && is_array($verification['summary']) ? $verification['summary'] : array();
+            $drift = isset($readiness['drift']) && is_array($readiness['drift']) ? $readiness['drift'] : array();
+            $drift_last = isset($drift['last']) && is_array($drift['last']) ? $drift['last'] : array();
+            $drift_log = isset($drift['log']) && is_array($drift['log']) ? $drift['log'] : array();
+            $drift_last_summary = isset($drift_last['summary']) && is_array($drift_last['summary']) ? $drift_last['summary'] : array();
 
             echo '<hr/>';
             echo '<h2>Forms Storage Migration Utility</h2>';
@@ -149,8 +166,17 @@ final class DCB_Diagnostics {
             echo '<tr><th>Option↔CPT Key Parity</th><td>' . esc_html(!empty($parity['exact_match']) ? 'match' : 'mismatch') . '</td></tr>';
             echo '<tr><th>Checksum Mismatches</th><td>' . esc_html((string) (int) ($parity['checksum_mismatch_count'] ?? 0)) . '</td></tr>';
             echo '<tr><th>Verification Coverage</th><td>' . esc_html((string) (int) ($verification_summary['verified_ratio'] ?? 0)) . '%</td></tr>';
+            echo '<tr><th>Parity Monitor</th><td>' . esc_html(!empty($drift['enabled']) ? 'enabled' : 'disabled') . '</td></tr>';
+            echo '<tr><th>Last Drift Severity</th><td>' . esc_html(sanitize_key((string) ($drift_last['severity'] ?? ($drift_last_summary['severity'] ?? 'info')))) . '</td></tr>';
             echo '<tr><th>Last Migration</th><td>' . esc_html($last_migrated_at !== '' ? ($last_migrated_at . ($last_migrated_target !== '' ? ' → ' . $last_migrated_target : '')) : 'never') . '</td></tr>';
             echo '</tbody></table>';
+
+            if (!empty($drift_last)) {
+                $drift_summary = isset($drift_last['summary']) && is_array($drift_last['summary']) ? $drift_last['summary'] : array();
+                echo '<p><strong>Last parity monitor:</strong> ' . esc_html(sanitize_text_field((string) ($drift_last['checked_at'] ?? ''))) . ' — '
+                    . esc_html(!empty($drift_last['drift_detected']) ? 'drift detected' : 'healthy')
+                    . ' (' . esc_html((string) (int) ($drift_summary['verified_ratio'] ?? 0)) . '% verified)</p>';
+            }
 
             if (!empty($parity['missing_in_target']) && is_array($parity['missing_in_target'])) {
                 echo '<p><strong>Missing in target:</strong> ' . esc_html(implode(', ', array_map('strval', $parity['missing_in_target']))) . '</p>';
@@ -190,6 +216,43 @@ final class DCB_Diagnostics {
             echo '<input type="hidden" name="target_mode" value="cpt" />';
             submit_button('Export Option→CPT Mismatch Report (JSON)', 'secondary', 'submit', false);
             echo '</form>';
+
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:8px;">';
+            wp_nonce_field('dcb_run_parity_check_now', 'dcb_parity_check_nonce');
+            echo '<input type="hidden" name="action" value="dcb_run_parity_check_now" />';
+            submit_button('Run Parity Check Now', 'secondary', 'submit', false);
+            echo '</form>';
+
+            if (!empty($drift_last)) {
+                echo '<p><strong>Last parity run:</strong> '
+                    . esc_html(sanitize_text_field((string) ($drift_last['checked_at'] ?? ''))) . ' | '
+                    . esc_html('status: ' . (!empty($drift_last['drift_detected']) ? 'drift' : 'healthy')) . ' | '
+                    . esc_html('severity: ' . sanitize_key((string) ($drift_last['severity'] ?? 'info')))
+                    . '</p>';
+                if (!empty($drift_last['drift_detected'])) {
+                    $export_link = add_query_arg(array('page' => 'dcb-settings'), admin_url('admin.php'));
+                    echo '<p><a class="button" href="' . esc_url($export_link) . '">Review mismatch export options</a></p>';
+                }
+            }
+
+            if (!empty($drift_log)) {
+                echo '<h3>Recent Drift Monitor Checks</h3>';
+                echo '<table class="widefat striped" style="max-width:920px"><thead><tr><th>Time</th><th>Status</th><th>Verified</th><th>Missing</th><th>Extra</th><th>Checksum Mismatch</th></tr></thead><tbody>';
+                foreach (array_reverse(array_slice($drift_log, -8)) as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    echo '<tr>';
+                    echo '<td>' . esc_html(sanitize_text_field((string) ($row['time'] ?? ''))) . '</td>';
+                    echo '<td>' . esc_html(!empty($row['drift_detected']) ? 'drift' : 'healthy') . '</td>';
+                    echo '<td>' . esc_html((string) (int) ($row['verified_ratio'] ?? 0)) . '%</td>';
+                    echo '<td>' . esc_html((string) (int) ($row['missing_count'] ?? 0)) . '</td>';
+                    echo '<td>' . esc_html((string) (int) ($row['extra_count'] ?? 0)) . '</td>';
+                    echo '<td>' . esc_html((string) (int) ($row['checksum_mismatch_count'] ?? 0)) . '</td>';
+                    echo '</tr>';
+                }
+                echo '</tbody></table>';
+            }
 
             if (class_exists('DCB_Workflow')) {
                 $health = DCB_Workflow::queue_health_summary();
@@ -305,6 +368,9 @@ final class DCB_Diagnostics {
 
         update_option('dcb_forms_storage_dual_read', !empty($_POST['dcb_forms_storage_dual_read']) ? '1' : '0', false);
         update_option('dcb_forms_storage_dual_write', !empty($_POST['dcb_forms_storage_dual_write']) ? '1' : '0', false);
+        update_option('dcb_forms_parity_monitor_enabled', !empty($_POST['dcb_forms_parity_monitor_enabled']) ? '1' : '0', false);
+        update_option('dcb_forms_parity_alert_enabled', !empty($_POST['dcb_forms_parity_alert_enabled']) ? '1' : '0', false);
+        update_option('dcb_forms_parity_alert_email', sanitize_email((string) ($_POST['dcb_forms_parity_alert_email'] ?? '')), false);
 
         $min_conf = isset($_POST['dcb_upload_min_confidence']) ? (float) $_POST['dcb_upload_min_confidence'] : 0.45;
         $min_conf = max(0.0, min(1.0, $min_conf));
@@ -396,5 +462,76 @@ final class DCB_Diagnostics {
         header('Content-Disposition: attachment; filename="dcb-migration-report-' . $source_mode . '-to-' . $target_mode . '.json"');
         echo wp_json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         exit;
+    }
+
+    public static function run_parity_check_now(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS)) {
+            wp_die('Unauthorized');
+        }
+
+        if (!isset($_POST['dcb_parity_check_nonce']) || !wp_verify_nonce((string) $_POST['dcb_parity_check_nonce'], 'dcb_run_parity_check_now')) {
+            wp_die('Security check failed');
+        }
+
+        if (!class_exists('DCB_Form_Repository')) {
+            wp_safe_redirect(add_query_arg(array(
+                'page' => 'dcb-settings',
+                'migration_notice' => rawurlencode('Storage repository is unavailable.'),
+            ), admin_url('admin.php')));
+            exit;
+        }
+
+        $result = DCB_Form_Repository::run_parity_check('manual_admin');
+        $summary = isset($result['summary']) && is_array($result['summary']) ? $result['summary'] : array();
+        $notice = 'Parity check completed.';
+        if (!empty($result['skipped'])) {
+            $notice = (string) ($result['message'] ?? 'Parity check skipped.');
+        } else {
+            $notice = sprintf(
+                'Parity check %1$s at %2$s. Severity: %3$s. Verified: %4$d%%, missing: %5$d, extra: %6$d, checksum mismatches: %7$d.',
+                !empty($result['drift_detected']) ? 'detected drift' : 'passed',
+                sanitize_text_field((string) ($result['checked_at'] ?? current_time('mysql'))),
+                sanitize_key((string) ($result['severity'] ?? ($summary['severity'] ?? 'info'))),
+                (int) ($summary['verified_ratio'] ?? 0),
+                (int) ($summary['missing_count'] ?? 0),
+                (int) ($summary['extra_count'] ?? 0),
+                (int) ($summary['checksum_mismatch_count'] ?? 0)
+            );
+        }
+
+        wp_safe_redirect(add_query_arg(array(
+            'page' => 'dcb-settings',
+            'migration_notice' => rawurlencode($notice),
+        ), admin_url('admin.php')));
+        exit;
+    }
+
+    public static function render_drift_warning_notice(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS)) {
+            return;
+        }
+        if (!class_exists('DCB_Form_Repository')) {
+            return;
+        }
+
+        $state = DCB_Form_Repository::drift_monitor_state();
+        $last = isset($state['last']) && is_array($state['last']) ? $state['last'] : array();
+        if (empty($last) || empty($last['drift_detected'])) {
+            return;
+        }
+
+        $summary = isset($last['summary']) && is_array($last['summary']) ? $last['summary'] : array();
+        $severity = sanitize_key((string) ($last['severity'] ?? ($summary['severity'] ?? 'warn')));
+        $notice_class = $severity === 'critical' ? 'notice-error' : 'notice-warning';
+        echo '<div class="notice ' . esc_attr($notice_class) . ' is-dismissible"><p>'
+            . esc_html(sprintf(
+                'Document Center storage drift detected (%1$s). Verified %2$d%% (missing: %3$d, extra: %4$d, checksum mismatches: %5$d). Review Settings → Forms Storage Migration Utility.',
+                $severity,
+                (int) ($summary['verified_ratio'] ?? 0),
+                (int) ($summary['missing_count'] ?? 0),
+                (int) ($summary['extra_count'] ?? 0),
+                (int) ($summary['checksum_mismatch_count'] ?? 0)
+            ))
+            . '</p></div>';
     }
 }

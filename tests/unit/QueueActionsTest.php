@@ -32,6 +32,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'tokassign1',
             'queue_action' => 'quick_assign',
             'submission_id' => $submissionId,
             'assignee_user_id' => 12,
@@ -58,6 +59,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'toktrans1',
             'queue_action' => 'quick_transition',
             'submission_id' => $submissionId,
             'to_status' => 'finalized',
@@ -87,6 +89,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'tokbulk1',
             'queue_action' => 'bulk_transition',
             'submission_ids' => array($submissionId),
             'bulk_to_status' => 'finalized',
@@ -115,6 +118,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'tokassign2',
             'queue_action' => 'quick_assign',
             'submission_id' => $submissionId,
             'assignee_user_id' => 99,
@@ -145,6 +149,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'tokassign3',
             'queue_action' => 'quick_assign',
             'submission_id' => $submissionId,
             'assignee_user_id' => 12,
@@ -178,6 +183,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'toktrans2',
             'queue_action' => 'quick_transition',
             'submission_id' => $submissionId,
             'to_status' => 'approved',
@@ -208,6 +214,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'tokassign4',
             'queue_action' => 'quick_assign',
             'submission_id' => $submissionId,
             'assignee_user_id' => 12,
@@ -246,6 +253,7 @@ final class QueueActionsTest extends TestCase {
 
         $_POST = array(
             'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'tokbulk2',
             'queue_action' => 'bulk_assign',
             'submission_ids' => array($firstId, $secondId),
             'bulk_assignee_user_id' => 12,
@@ -277,7 +285,7 @@ final class QueueActionsTest extends TestCase {
         ));
 
         $GLOBALS['dcb_current_caps']['dcb_manage_workflows'] = false;
-        $_POST = array('dcb_workflow_queue_nonce' => 'valid', 'queue_action' => 'quick_assign', 'submission_id' => $submissionId, 'assignee_user_id' => 11);
+        $_POST = array('dcb_workflow_queue_nonce' => 'valid', 'action_replay_token' => 'toksec1', 'queue_action' => 'quick_assign', 'submission_id' => $submissionId, 'assignee_user_id' => 11);
         $_REQUEST = $_POST;
 
         try {
@@ -289,7 +297,7 @@ final class QueueActionsTest extends TestCase {
         }
 
         $GLOBALS['dcb_current_caps']['dcb_manage_workflows'] = true;
-        $_POST = array('dcb_workflow_queue_nonce' => 'invalid', 'queue_action' => 'quick_assign', 'submission_id' => $submissionId, 'assignee_user_id' => 11);
+        $_POST = array('dcb_workflow_queue_nonce' => 'invalid', 'action_replay_token' => 'toksec2', 'queue_action' => 'quick_assign', 'submission_id' => $submissionId, 'assignee_user_id' => 11);
         $_REQUEST = $_POST;
 
         try {
@@ -298,6 +306,45 @@ final class QueueActionsTest extends TestCase {
         } catch (\DCB_Test_Halt $halt) {
             $this->assertSame('nonce_failed', $halt->kind);
         }
+    }
+
+    public function testQueueActionReplayTokenRejectsDuplicateSubmission(): void {
+        $submissionId = (int) \wp_insert_post(array(
+            'post_type' => 'dcb_form_submission',
+            'post_status' => 'publish',
+            'post_title' => 'Replay Guard Submission',
+        ));
+
+        $payload = array(
+            'dcb_workflow_queue_nonce' => 'valid',
+            'action_replay_token' => 'tokdup1',
+            'queue_action' => 'quick_assign',
+            'submission_id' => $submissionId,
+            'assignee_user_id' => 12,
+        );
+
+        $_POST = $payload;
+        $_REQUEST = $_POST;
+        try {
+            \DCB_Workflow::handle_queue_action();
+            $this->fail('Expected redirect halt.');
+        } catch (\DCB_Test_Halt $halt) {
+            $this->assertSame('redirect', $halt->kind);
+        }
+
+        $_POST = $payload;
+        $_REQUEST = $_POST;
+        try {
+            \DCB_Workflow::handle_queue_action();
+            $this->fail('Expected redirect halt.');
+        } catch (\DCB_Test_Halt $halt) {
+            $this->assertSame('redirect', $halt->kind);
+            $notice = $this->extractNoticeFromRedirect((string) $halt->payload);
+            $this->assertStringContainsString('duplicate action ignored', strtolower($notice));
+        }
+
+        $audit = (array) \get_option('dcb_workflow_action_audit_log', array());
+        $this->assertNotEmpty($audit);
     }
 
     private function extractNoticeFromRedirect(string $url): string {

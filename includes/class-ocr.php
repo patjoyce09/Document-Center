@@ -40,6 +40,15 @@ final class DCB_OCR {
         if (!is_array($last_probe)) {
             $last_probe = array();
         }
+        $probe_history = self::probe_history();
+        $last_success_at = sanitize_text_field((string) get_option('dcb_ocr_remote_last_success_at', ''));
+        $last_failure_at = sanitize_text_field((string) get_option('dcb_ocr_remote_last_failure_at', ''));
+        $last_failure_reason = sanitize_text_field((string) get_option('dcb_ocr_remote_last_failure_reason', ''));
+        $unhealthy_streak = max(0, (int) get_option('dcb_ocr_remote_unhealthy_streak', 0));
+        $runtime_stats = get_option('dcb_ocr_remote_runtime_stats', array());
+        if (!is_array($runtime_stats)) {
+            $runtime_stats = array();
+        }
         $logs = dcb_upload_ocr_debug_log_recent(10);
 
         echo '<div class="wrap">';
@@ -84,6 +93,45 @@ final class DCB_OCR {
                 }
                 echo '</ul>';
             }
+        }
+
+        echo '<p><strong>Last remote success:</strong> ' . esc_html($last_success_at !== '' ? $last_success_at : 'n/a') . '</p>';
+        echo '<p><strong>Last remote failure:</strong> ' . esc_html($last_failure_at !== '' ? $last_failure_at : 'n/a') . '</p>';
+        if ($last_failure_reason !== '') {
+            echo '<p><strong>Last failure reason:</strong> ' . esc_html($last_failure_reason) . '</p>';
+        }
+        echo '<p><strong>Unhealthy streak:</strong> ' . esc_html((string) $unhealthy_streak) . '</p>';
+        if ($unhealthy_streak >= 3) {
+            echo '<div class="notice notice-warning inline"><p><strong>Warning:</strong> Remote OCR has failed repeatedly. Review API key, timeout, contract version, and capabilities before forcing remote mode.</p></div>';
+        }
+
+        echo '<p><strong>Remote fallback count:</strong> ' . esc_html((string) (int) ($runtime_stats['fallback_count'] ?? 0)) . '</p>';
+        if (!empty($runtime_stats['recent_fallbacks']) && is_array($runtime_stats['recent_fallbacks'])) {
+            echo '<p><strong>Recent fallback events:</strong></p><ul style="list-style:disc;padding-left:18px;">';
+            foreach (array_reverse(array_slice($runtime_stats['recent_fallbacks'], -6)) as $event) {
+                if (!is_array($event)) {
+                    continue;
+                }
+                $ts = sanitize_text_field((string) ($event['timestamp'] ?? ''));
+                $rid = sanitize_text_field((string) ($event['request_id'] ?? ''));
+                $reason = sanitize_key((string) ($event['reason'] ?? 'empty_extraction'));
+                echo '<li>' . esc_html($ts !== '' ? $ts : 'unknown time') . ' — request_id: ' . esc_html($rid !== '' ? $rid : 'n/a') . ' — reason: ' . esc_html($reason) . '</li>';
+            }
+            echo '</ul>';
+        }
+
+        if (!empty($probe_history)) {
+            echo '<h3>Recent Probe History</h3><ul style="list-style:disc;padding-left:18px;">';
+            foreach (array_reverse(array_slice($probe_history, -8)) as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $ts = sanitize_text_field((string) ($entry['timestamp'] ?? ''));
+                $status = sanitize_key((string) ($entry['status'] ?? 'unknown'));
+                $reason = sanitize_text_field((string) ($entry['failure_reason'] ?? ''));
+                echo '<li>' . esc_html($ts) . ' — ' . esc_html($status) . ($reason !== '' ? (' — ' . esc_html($reason)) : '') . '</li>';
+            }
+            echo '</ul>';
         }
 
         if (!empty($provider_diag['engines']) && is_array($provider_diag['engines'])) {
@@ -216,9 +264,52 @@ final class DCB_OCR {
             'missing_capabilities' => isset($remote['missing_capabilities']) && is_array($remote['missing_capabilities']) ? $remote['missing_capabilities'] : array(),
         );
 
+        $first_diag = isset($row['diagnostics'][0]) && is_array($row['diagnostics'][0]) ? $row['diagnostics'][0] : array();
+        $row['failure_reason'] = !empty($first_diag['code']) ? sanitize_key((string) $first_diag['code']) : '';
+
         update_option('dcb_ocr_remote_probe_last', $row, false);
+        self::append_probe_history($row);
+        self::update_probe_health_state($row);
 
         wp_safe_redirect(add_query_arg(array('page' => 'dcb-ocr-diagnostics', 'probe' => '1'), admin_url('admin.php')));
         exit;
+    }
+
+    private static function probe_history(): array {
+        $rows = get_option('dcb_ocr_remote_probe_history', array());
+        return is_array($rows) ? $rows : array();
+    }
+
+    private static function append_probe_history(array $row): void {
+        $history = self::probe_history();
+        $history[] = array(
+            'timestamp' => sanitize_text_field((string) ($row['timestamp'] ?? current_time('mysql'))),
+            'status' => sanitize_key((string) ($row['status'] ?? 'unknown')),
+            'failure_reason' => sanitize_key((string) ($row['failure_reason'] ?? '')),
+            'contract_version' => sanitize_text_field((string) ($row['contract_version'] ?? '')),
+            'provider_version' => sanitize_text_field((string) ($row['provider_version'] ?? '')),
+        );
+
+        if (count($history) > 30) {
+            $history = array_slice($history, -30);
+        }
+
+        update_option('dcb_ocr_remote_probe_history', $history, false);
+    }
+
+    private static function update_probe_health_state(array $row): void {
+        $is_healthy = sanitize_key((string) ($row['status'] ?? 'degraded')) === 'healthy';
+        $failure_reason = sanitize_key((string) ($row['failure_reason'] ?? 'remote_error'));
+        $streak = max(0, (int) get_option('dcb_ocr_remote_unhealthy_streak', 0));
+
+        if ($is_healthy) {
+            update_option('dcb_ocr_remote_last_success_at', current_time('mysql'), false);
+            update_option('dcb_ocr_remote_unhealthy_streak', 0, false);
+            return;
+        }
+
+        update_option('dcb_ocr_remote_last_failure_at', current_time('mysql'), false);
+        update_option('dcb_ocr_remote_last_failure_reason', $failure_reason !== '' ? $failure_reason : 'remote_error', false);
+        update_option('dcb_ocr_remote_unhealthy_streak', $streak + 1, false);
     }
 }

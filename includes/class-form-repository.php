@@ -15,9 +15,18 @@ final class DCB_Form_Repository {
     private const META_FORM_PAYLOAD = '_dcb_form_payload';
     private const META_FORM_VERSION = '_dcb_form_version';
     private const META_FORM_UPDATED_AT = '_dcb_form_updated_at';
+    private const DRIFT_LAST_OPTION = 'dcb_forms_storage_drift_last';
+    private const DRIFT_LOG_OPTION = 'dcb_forms_storage_drift_log';
+    private const DRIFT_MONITOR_ENABLED_OPTION = 'dcb_forms_parity_monitor_enabled';
+    private const DRIFT_MONITOR_HOOK = 'dcb_forms_parity_monitor';
+    private const DRIFT_ALERT_ENABLED_OPTION = 'dcb_forms_parity_alert_enabled';
+    private const DRIFT_ALERT_EMAIL_OPTION = 'dcb_forms_parity_alert_email';
+    private const DRIFT_ALERT_LAST_OPTION = 'dcb_forms_parity_alert_last';
 
     public static function init(): void {
         add_action('init', array(__CLASS__, 'register_post_type'), 20);
+        add_action('init', array(__CLASS__, 'ensure_parity_monitor_scheduled'), 25);
+        add_action(self::DRIFT_MONITOR_HOOK, array(__CLASS__, 'run_scheduled_parity_monitor'));
     }
 
     public static function register_post_type(): void {
@@ -135,7 +144,110 @@ final class DCB_Form_Repository {
                 'summary' => self::parity_summary($parity),
                 'mismatch_rows' => self::mismatch_rows($parity),
             ),
+            'drift' => self::drift_monitor_state(),
         );
+    }
+
+    public static function ensure_parity_monitor_scheduled(): void {
+        if (get_option(self::DRIFT_MONITOR_ENABLED_OPTION, '1') !== '1') {
+            return;
+        }
+
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+
+        if (!wp_next_scheduled(self::DRIFT_MONITOR_HOOK)) {
+            wp_schedule_event(time() + 300, 'hourly', self::DRIFT_MONITOR_HOOK);
+        }
+    }
+
+    public static function run_scheduled_parity_monitor(): array {
+        return self::run_parity_check('scheduled');
+    }
+
+    public static function run_parity_check(string $trigger = 'manual'): array {
+        $mode = self::storage_mode();
+        if ($mode === 'option') {
+            return array('ok' => true, 'skipped' => true, 'severity' => 'info', 'message' => 'Parity monitor skipped in option mode.');
+        }
+
+        $report = self::parity_between_modes('option', 'cpt');
+        $summary = isset($report['summary']) && is_array($report['summary']) ? $report['summary'] : array();
+        $drift_detected = empty($summary['exact_match']);
+        $severity = self::classify_drift_severity($summary);
+
+        $state = array(
+            'checked_at' => current_time('mysql'),
+            'mode' => $mode,
+            'trigger' => sanitize_key($trigger),
+            'drift_detected' => $drift_detected,
+            'severity' => $severity,
+            'summary' => $summary,
+            'parity' => isset($report['parity']) && is_array($report['parity']) ? $report['parity'] : array(),
+        );
+        update_option(self::DRIFT_LAST_OPTION, $state, false);
+
+        $log = get_option(self::DRIFT_LOG_OPTION, array());
+        if (!is_array($log)) {
+            $log = array();
+        }
+        $log[] = array(
+            'time' => current_time('mysql'),
+            'mode' => $mode,
+            'trigger' => sanitize_key($trigger),
+            'drift_detected' => $drift_detected,
+            'severity' => $severity,
+            'verified_ratio' => (int) ($summary['verified_ratio'] ?? 0),
+            'missing_count' => (int) ($summary['missing_count'] ?? 0),
+            'extra_count' => (int) ($summary['extra_count'] ?? 0),
+            'checksum_mismatch_count' => (int) ($summary['checksum_mismatch_count'] ?? 0),
+        );
+        if (count($log) > 40) {
+            $log = array_slice($log, -40);
+        }
+        update_option(self::DRIFT_LOG_OPTION, $log, false);
+
+        self::maybe_send_critical_drift_alert($state);
+
+        return array(
+            'ok' => true,
+            'drift_detected' => $drift_detected,
+            'severity' => $severity,
+            'summary' => $summary,
+            'checked_at' => (string) ($state['checked_at'] ?? ''),
+            'message' => $drift_detected ? 'Storage parity drift detected.' : 'Storage parity is healthy.',
+        );
+    }
+
+    public static function drift_monitor_state(): array {
+        $last = get_option(self::DRIFT_LAST_OPTION, array());
+        $log = get_option(self::DRIFT_LOG_OPTION, array());
+
+        return array(
+            'enabled' => get_option(self::DRIFT_MONITOR_ENABLED_OPTION, '1') === '1',
+            'alerting_enabled' => get_option(self::DRIFT_ALERT_ENABLED_OPTION, '0') === '1',
+            'alert_email' => sanitize_email((string) get_option(self::DRIFT_ALERT_EMAIL_OPTION, '')),
+            'last' => is_array($last) ? $last : array(),
+            'log' => is_array($log) ? $log : array(),
+        );
+    }
+
+    public static function classify_drift_severity(array $summary): string {
+        $missing = (int) ($summary['missing_count'] ?? 0);
+        $extra = (int) ($summary['extra_count'] ?? 0);
+        $checksum = (int) ($summary['checksum_mismatch_count'] ?? 0);
+        $ratio = (int) ($summary['verified_ratio'] ?? 100);
+
+        if ($missing < 1 && $extra < 1 && $checksum < 1) {
+            return 'info';
+        }
+
+        if ($missing >= 5 || $ratio < 85 || $checksum >= 12) {
+            return 'critical';
+        }
+
+        return 'warn';
     }
 
     public static function parity_between_modes(string $source_mode, string $target_mode): array {
@@ -454,13 +566,69 @@ final class DCB_Form_Repository {
         $checksum_mismatch_count = (int) ($parity['checksum_mismatch_count'] ?? 0);
         $verified_ratio = $source_count > 0 ? min(100, (int) round((($shared_count - $checksum_mismatch_count) / $source_count) * 100)) : 100;
 
-        return array(
+        $summary = array(
             'exact_match' => !empty($parity['exact_match']),
             'missing_count' => $missing_count,
             'extra_count' => $extra_count,
             'checksum_mismatch_count' => $checksum_mismatch_count,
             'verified_ratio' => $verified_ratio,
         );
+
+        $summary['severity'] = self::classify_drift_severity($summary);
+        return $summary;
+    }
+
+    private static function maybe_send_critical_drift_alert(array $state): void {
+        if ((string) ($state['severity'] ?? '') !== 'critical') {
+            return;
+        }
+        if (get_option(self::DRIFT_ALERT_ENABLED_OPTION, '0') !== '1') {
+            return;
+        }
+        if (!function_exists('wp_mail')) {
+            return;
+        }
+
+        $to = sanitize_email((string) get_option(self::DRIFT_ALERT_EMAIL_OPTION, ''));
+        if ($to === '' || !is_email($to)) {
+            return;
+        }
+
+        $summary = isset($state['summary']) && is_array($state['summary']) ? $state['summary'] : array();
+        $signature = sha1((string) wp_json_encode(array(
+            (int) ($summary['missing_count'] ?? 0),
+            (int) ($summary['extra_count'] ?? 0),
+            (int) ($summary['checksum_mismatch_count'] ?? 0),
+            (int) ($summary['verified_ratio'] ?? 0),
+        ), JSON_UNESCAPED_SLASHES));
+
+        $last_alert = get_option(self::DRIFT_ALERT_LAST_OPTION, array());
+        if (!is_array($last_alert)) {
+            $last_alert = array();
+        }
+        $last_sig = sanitize_text_field((string) ($last_alert['signature'] ?? ''));
+        $last_time = (int) ($last_alert['time'] ?? 0);
+        $now = time();
+        $cooldown = 6 * 3600;
+        if ($signature === $last_sig && ($last_time + $cooldown) > $now) {
+            return;
+        }
+
+        $subject = '[DCB] Critical parity drift detected';
+        $message = sprintf(
+            "Critical storage drift detected. Verified=%d%%, missing=%d, extra=%d, checksum mismatches=%d. Checked at %s.",
+            (int) ($summary['verified_ratio'] ?? 0),
+            (int) ($summary['missing_count'] ?? 0),
+            (int) ($summary['extra_count'] ?? 0),
+            (int) ($summary['checksum_mismatch_count'] ?? 0),
+            sanitize_text_field((string) ($state['checked_at'] ?? current_time('mysql')))
+        );
+        wp_mail($to, $subject, $message);
+
+        update_option(self::DRIFT_ALERT_LAST_OPTION, array(
+            'signature' => $signature,
+            'time' => $now,
+        ), false);
     }
 
     private static function mismatch_rows(array $parity): array {

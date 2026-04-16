@@ -43,6 +43,7 @@ final class DCB_OCR_Engine_Local implements DCB_OCR_Engine {
 
 final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
     private const CONTRACT_VERSION = 'dcb-ocr-v1';
+    private const EXPECTED_REMOTE_LANG = 'eng';
 
     public function slug(): string {
         return 'remote';
@@ -160,6 +161,27 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
             return $this->error_result('max_file_size_exceeded', 'File exceeds configured OCR max file size.', $request_id);
         }
 
+        $preflight = $this->preflight_capability_check($mime, $timeout, $request_id, $auth_header, $api_key);
+        if (empty($preflight['ok'])) {
+            return $this->error_result(
+                sanitize_key((string) ($preflight['failure_reason'] ?? 'remote_missing_capability')),
+                sanitize_text_field((string) ($preflight['message'] ?? 'Remote OCR capability check failed for this file type.')),
+                $request_id,
+                (int) ($preflight['http_status'] ?? 0),
+                array(
+                    'provider' => sanitize_text_field((string) ($preflight['provider'] ?? 'remote')),
+                    'provider_version' => sanitize_text_field((string) ($preflight['provider_version'] ?? '')),
+                    'contract_version' => sanitize_text_field((string) ($preflight['contract_version'] ?? self::CONTRACT_VERSION)),
+                    'request_url' => esc_url_raw((string) ($preflight['request_url'] ?? '')),
+                    'engine_used' => 'remote',
+                )
+            );
+        }
+
+        $preflight_warnings = isset($preflight['warnings']) && is_array($preflight['warnings'])
+            ? $this->sanitize_warnings($preflight['warnings'])
+            : array();
+
         $body = array(
             'contract_version' => self::CONTRACT_VERSION,
             'request_id' => $request_id,
@@ -214,6 +236,9 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
         $text = trim((string) ($normalized['text'] ?? ''));
         $pages = $this->sanitize_pages(isset($normalized['pages']) && is_array($normalized['pages']) ? $normalized['pages'] : array());
         $warnings = $this->sanitize_warnings(isset($normalized['warnings']) && is_array($normalized['warnings']) ? $normalized['warnings'] : array());
+        if (!empty($preflight_warnings)) {
+            $warnings = array_merge($warnings, $preflight_warnings);
+        }
         $failure_reason = sanitize_key((string) ($normalized['failure_reason'] ?? ''));
         if ($failure_reason === '' && $text === '') {
             $failure_reason = 'empty_extraction';
@@ -636,6 +661,121 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
 
         return array_values(array_unique($missing));
     }
+
+    private function preflight_capability_check(string $mime, int $timeout, string $request_id, string $auth_header, string $api_key): array {
+        $caps = $this->remote_call('capabilities', 'GET', array(), $timeout, $request_id, $auth_header, $api_key);
+        if (empty($caps['ok'])) {
+            return array(
+                'ok' => true,
+                'warnings' => array(
+                    array(
+                        'code' => 'capabilities_unavailable',
+                        'message' => 'Remote capabilities endpoint unavailable; OCR extraction will proceed without preflight capability guarantees.',
+                    ),
+                ),
+            );
+        }
+
+        $body = isset($caps['body']) && is_array($caps['body']) ? $caps['body'] : array();
+        $has_capability_fields = array_key_exists('supported_file_types', $body)
+            || array_key_exists('supports_pdf_text_extraction', $body)
+            || array_key_exists('supports_scanned_pdf_rasterization', $body)
+            || array_key_exists('supports_image_ocr', $body);
+        if (!$has_capability_fields) {
+            return array(
+                'ok' => true,
+                'warnings' => array(
+                    array(
+                        'code' => 'capabilities_shape_unknown',
+                        'message' => 'Remote capabilities payload did not expose expected feature fields; extraction will proceed.',
+                    ),
+                ),
+            );
+        }
+
+        $remote_contract = sanitize_text_field((string) ($body['contract_version'] ?? ''));
+        if ($remote_contract !== '' && $remote_contract !== self::CONTRACT_VERSION) {
+            return array(
+                'ok' => false,
+                'failure_reason' => 'remote_contract_version_mismatch',
+                'message' => 'Remote OCR contract mismatch during capability preflight.',
+                'contract_version' => $remote_contract,
+                'http_status' => (int) ($caps['status_code'] ?? 0),
+                'request_url' => (string) ($caps['url'] ?? ''),
+            );
+        }
+
+        $supported_types = isset($body['supported_file_types']) && is_array($body['supported_file_types'])
+            ? array_map('strtolower', array_map('strval', $body['supported_file_types']))
+            : array();
+
+        if (!empty($supported_types) && !in_array(strtolower($mime), $supported_types, true)) {
+            return array(
+                'ok' => false,
+                'failure_reason' => 'remote_missing_capability',
+                'message' => 'Remote OCR provider does not advertise support for mime: ' . sanitize_text_field($mime),
+                'contract_version' => $remote_contract !== '' ? $remote_contract : self::CONTRACT_VERSION,
+                'provider' => sanitize_text_field((string) ($body['provider'] ?? 'remote')),
+                'provider_version' => sanitize_text_field((string) ($body['provider_version'] ?? '')),
+                'http_status' => (int) ($caps['status_code'] ?? 0),
+                'request_url' => (string) ($caps['url'] ?? ''),
+            );
+        }
+
+        $is_pdf = strtolower($mime) === 'application/pdf';
+        $is_image = strpos(strtolower($mime), 'image/') === 0;
+
+        if ($is_pdf && (array_key_exists('supports_pdf_text_extraction', $body) || array_key_exists('supports_scanned_pdf_rasterization', $body))) {
+            $pdf_text = !empty($body['supports_pdf_text_extraction']);
+            $pdf_scan = !empty($body['supports_scanned_pdf_rasterization']);
+            if (!$pdf_text && !$pdf_scan) {
+                return array(
+                    'ok' => false,
+                    'failure_reason' => 'remote_missing_capability',
+                    'message' => 'Remote OCR provider lacks both PDF text extraction and scanned PDF rasterization support.',
+                    'contract_version' => $remote_contract !== '' ? $remote_contract : self::CONTRACT_VERSION,
+                    'provider' => sanitize_text_field((string) ($body['provider'] ?? 'remote')),
+                    'provider_version' => sanitize_text_field((string) ($body['provider_version'] ?? '')),
+                    'http_status' => (int) ($caps['status_code'] ?? 0),
+                    'request_url' => (string) ($caps['url'] ?? ''),
+                );
+            }
+        }
+
+        if ($is_image && array_key_exists('supports_image_ocr', $body) && empty($body['supports_image_ocr'])) {
+            return array(
+                'ok' => false,
+                'failure_reason' => 'remote_missing_capability',
+                'message' => 'Remote OCR provider lacks image OCR support for this workflow.',
+                'contract_version' => $remote_contract !== '' ? $remote_contract : self::CONTRACT_VERSION,
+                'provider' => sanitize_text_field((string) ($body['provider'] ?? 'remote')),
+                'provider_version' => sanitize_text_field((string) ($body['provider_version'] ?? '')),
+                'http_status' => (int) ($caps['status_code'] ?? 0),
+                'request_url' => (string) ($caps['url'] ?? ''),
+            );
+        }
+
+        $warnings = array();
+        $langs = isset($body['languages_available']) && is_array($body['languages_available'])
+            ? array_map('strtolower', array_map('strval', $body['languages_available']))
+            : array();
+        if (($is_image || $is_pdf) && !empty($langs) && !in_array(self::EXPECTED_REMOTE_LANG, $langs, true)) {
+            $warnings[] = array(
+                'code' => 'language_mismatch',
+                'message' => 'Remote OCR provider languages do not include expected OCR language: ' . self::EXPECTED_REMOTE_LANG,
+            );
+        }
+
+        return array(
+            'ok' => true,
+            'warnings' => $warnings,
+            'contract_version' => $remote_contract !== '' ? $remote_contract : self::CONTRACT_VERSION,
+            'provider' => sanitize_text_field((string) ($body['provider'] ?? 'remote')),
+            'provider_version' => sanitize_text_field((string) ($body['provider_version'] ?? '')),
+            'http_status' => (int) ($caps['status_code'] ?? 0),
+            'request_url' => (string) ($caps['url'] ?? ''),
+        );
+    }
 }
 
 final class DCB_OCR_Engine_Manager {
@@ -672,14 +812,20 @@ final class DCB_OCR_Engine_Manager {
         $engine = self::active_engine();
         $result = $engine->extract($file_path, $mime);
 
+        $used_remote = $engine->slug() === 'remote';
         $remote_empty = trim((string) ($result['text'] ?? '')) === '';
         $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
-        if ($mode === 'auto' && $engine->slug() === 'remote' && ($remote_empty || $failure_reason === 'empty_extraction')) {
+        if ($mode === 'auto' && $used_remote && ($remote_empty || $failure_reason === 'empty_extraction')) {
+            self::record_remote_runtime_event($result, true);
             $fallback = (new DCB_OCR_Engine_Local())->extract($file_path, $mime);
             $fallback['warnings'][] = array('code' => 'auto_fallback_to_local', 'message' => 'Remote OCR returned empty result. Fell back to local OCR.');
             $fallback['provenance']['fallback_from'] = 'remote';
             $fallback['provenance']['fallback_reason'] = $failure_reason !== '' ? $failure_reason : 'empty_extraction';
             return $fallback;
+        }
+
+        if ($used_remote) {
+            self::record_remote_runtime_event($result, false);
         }
 
         return $result;
@@ -698,5 +844,47 @@ final class DCB_OCR_Engine_Manager {
                 'remote' => $remote->capabilities(),
             ),
         );
+    }
+
+    private static function record_remote_runtime_event(array $result, bool $fallback_used): void {
+        $stats = get_option('dcb_ocr_remote_runtime_stats', array());
+        if (!is_array($stats)) {
+            $stats = array();
+        }
+
+        $stats['total_calls'] = max(0, (int) ($stats['total_calls'] ?? 0)) + 1;
+        $stats['success_count'] = max(0, (int) ($stats['success_count'] ?? 0));
+        $stats['failure_count'] = max(0, (int) ($stats['failure_count'] ?? 0));
+        $stats['fallback_count'] = max(0, (int) ($stats['fallback_count'] ?? 0));
+        $stats['unhealthy_streak'] = max(0, (int) ($stats['unhealthy_streak'] ?? 0));
+
+        $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
+        $success = $failure_reason === '' && trim((string) ($result['text'] ?? '')) !== '';
+        if ($success) {
+            $stats['success_count']++;
+            $stats['last_success_at'] = current_time('mysql');
+            $stats['unhealthy_streak'] = 0;
+        } else {
+            $stats['failure_count']++;
+            $stats['last_failure_at'] = current_time('mysql');
+            $stats['last_failure_reason'] = $failure_reason !== '' ? $failure_reason : 'empty_extraction';
+            $stats['unhealthy_streak'] = max(0, (int) ($stats['unhealthy_streak'] ?? 0)) + 1;
+        }
+
+        if ($fallback_used) {
+            $stats['fallback_count']++;
+            $events = isset($stats['recent_fallbacks']) && is_array($stats['recent_fallbacks']) ? $stats['recent_fallbacks'] : array();
+            $events[] = array(
+                'timestamp' => current_time('mysql'),
+                'request_id' => sanitize_text_field((string) (($result['provenance']['request_id'] ?? ''))),
+                'reason' => $failure_reason !== '' ? $failure_reason : 'empty_extraction',
+            );
+            if (count($events) > 15) {
+                $events = array_slice($events, -15);
+            }
+            $stats['recent_fallbacks'] = $events;
+        }
+
+        update_option('dcb_ocr_remote_runtime_stats', $stats, false);
     }
 }

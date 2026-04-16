@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class DCB_Migrations {
     private const OPTION_KEY = 'dcb_schema_version';
-    private const TARGET_VERSION = 5;
+    private const TARGET_VERSION = 6;
 
     public static function activate(): void {
         self::run();
@@ -89,6 +89,25 @@ final class DCB_Migrations {
             }
             if (get_option('dcb_forms_storage_last_migrated_target', null) === null) {
                 add_option('dcb_forms_storage_last_migrated_target', '', '', false);
+            }
+            return;
+        }
+
+        if ($version === 6) {
+            if (get_option('dcb_workflow_action_replay_tokens', null) === null) {
+                add_option('dcb_workflow_action_replay_tokens', array(), '', false);
+            }
+            if (get_option('dcb_workflow_action_audit_log', null) === null) {
+                add_option('dcb_workflow_action_audit_log', array(), '', false);
+            }
+            if (get_option('dcb_forms_storage_drift_last', null) === null) {
+                add_option('dcb_forms_storage_drift_last', array(), '', false);
+            }
+            if (get_option('dcb_forms_storage_drift_log', null) === null) {
+                add_option('dcb_forms_storage_drift_log', array(), '', false);
+            }
+            if (get_option('dcb_forms_parity_monitor_enabled', null) === null) {
+                add_option('dcb_forms_parity_monitor_enabled', '1', '', false);
             }
         }
     }

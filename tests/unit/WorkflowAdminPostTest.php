@@ -33,6 +33,7 @@ final class WorkflowAdminPostTest extends TestCase {
         $_POST = array(
             'submission_id' => $submissionId,
             'dcb_workflow_nonce' => 'valid',
+            'action_replay_token' => 'tokmeta1',
             'to_status' => 'finalized',
             'assignee_user_id' => 0,
             'assignee_role' => '',
@@ -62,6 +63,7 @@ final class WorkflowAdminPostTest extends TestCase {
         $_POST = array(
             'submission_id' => $submissionId,
             'dcb_workflow_nonce' => 'valid',
+            'action_replay_token' => 'tokmeta2',
             'to_status' => 'in_review',
         );
         $_REQUEST = $_POST;
@@ -78,6 +80,7 @@ final class WorkflowAdminPostTest extends TestCase {
         $_POST = array(
             'submission_id' => $submissionId,
             'dcb_workflow_nonce' => 'invalid',
+            'action_replay_token' => 'tokmeta3',
             'to_status' => 'in_review',
         );
         $_REQUEST = $_POST;
