@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 final class DCB_Diagnostics {
     public static function init(): void {
         add_action('admin_post_dcb_save_settings', array(__CLASS__, 'save_settings'));
+        add_action('admin_post_dcb_run_storage_migration', array(__CLASS__, 'run_storage_migration'));
     }
 
     public static function render_settings_page(): void {
@@ -26,6 +27,9 @@ final class DCB_Diagnostics {
 
         if (isset($_GET['updated'])) {
             echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
+        }
+        if (isset($_GET['migration_notice'])) {
+            echo '<div class="notice notice-info is-dismissible"><p>' . esc_html(sanitize_text_field((string) $_GET['migration_notice'])) . '</p></div>';
         }
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
@@ -68,6 +72,16 @@ final class DCB_Diagnostics {
         echo '<label><input type="checkbox" name="dcb_tutor_integration_enabled" value="1" ' . checked($tutor_enabled, true, false) . ' /> Enable optional Tutor LMS integration module</label>';
         echo '</td></tr>';
 
+        $dual_read_enabled = $field('dcb_forms_storage_dual_read') === '1';
+        echo '<tr><th scope="row">Forms Storage Dual Read</th><td>';
+        echo '<label><input type="checkbox" name="dcb_forms_storage_dual_read" value="1" ' . checked($dual_read_enabled, true, false) . ' /> If active storage is empty, fallback read from option backend</label>';
+        echo '</td></tr>';
+
+        $dual_write_enabled = $field('dcb_forms_storage_dual_write') === '1';
+        echo '<tr><th scope="row">Forms Storage Dual Write</th><td>';
+        echo '<label><input type="checkbox" name="dcb_forms_storage_dual_write" value="1" ' . checked($dual_write_enabled, true, false) . ' /> When mode is not option, also write to option backend</label>';
+        echo '</td></tr>';
+
         $mapping_raw = wp_json_encode(get_option('dcb_tutor_mapping', array()), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if (!is_string($mapping_raw)) {
             $mapping_raw = '{}';
@@ -81,6 +95,36 @@ final class DCB_Diagnostics {
 
         submit_button('Save Settings');
         echo '</form>';
+
+        if (class_exists('DCB_Form_Repository')) {
+            $readiness = DCB_Form_Repository::migration_readiness();
+            $last_migrated_at = sanitize_text_field((string) get_option('dcb_forms_storage_last_migrated_at', ''));
+            $last_migrated_target = sanitize_key((string) get_option('dcb_forms_storage_last_migrated_target', ''));
+
+            echo '<hr/>';
+            echo '<h2>Forms Storage Migration Utility</h2>';
+            echo '<p>Use dry-run first, then run migration to backfill shadow storage before changing active mode.</p>';
+            echo '<table class="widefat striped" style="max-width:920px"><tbody>';
+            echo '<tr><th style="width:260px">Current Mode</th><td>' . esc_html((string) ($readiness['mode'] ?? 'option')) . '</td></tr>';
+            echo '<tr><th>Dual Read</th><td>' . esc_html(!empty($readiness['dual_read']) ? 'enabled' : 'disabled') . '</td></tr>';
+            echo '<tr><th>Dual Write</th><td>' . esc_html(!empty($readiness['dual_write']) ? 'enabled' : 'disabled') . '</td></tr>';
+            echo '<tr><th>Option Backend Forms</th><td>' . esc_html((string) (int) ($readiness['option_count'] ?? 0)) . '</td></tr>';
+            echo '<tr><th>Active/Target Backend Forms</th><td>' . esc_html((string) (int) ($readiness['target_count'] ?? 0)) . '</td></tr>';
+            echo '<tr><th>Last Migration</th><td>' . esc_html($last_migrated_at !== '' ? ($last_migrated_at . ($last_migrated_target !== '' ? ' → ' . $last_migrated_target : '')) : 'never') . '</td></tr>';
+            echo '</tbody></table>';
+
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:12px;">';
+            wp_nonce_field('dcb_run_storage_migration', 'dcb_storage_migration_nonce');
+            echo '<input type="hidden" name="action" value="dcb_run_storage_migration" />';
+            echo '<label for="dcb-storage-migration-target"><strong>Target Backend</strong></label> ';
+            echo '<select id="dcb-storage-migration-target" name="target_mode">';
+            echo '<option value="cpt">cpt</option>';
+            echo '<option value="table">table</option>';
+            echo '</select> ';
+            echo '<label><input type="checkbox" name="dry_run" value="1" checked="checked" /> Dry run</label> ';
+            submit_button('Run Storage Migration', 'secondary', 'submit', false);
+            echo '</form>';
+        }
 
         echo '</div>';
     }
@@ -133,6 +177,9 @@ final class DCB_Diagnostics {
             update_option('dcb_forms_storage_mode', 'option', false);
         }
 
+        update_option('dcb_forms_storage_dual_read', !empty($_POST['dcb_forms_storage_dual_read']) ? '1' : '0', false);
+        update_option('dcb_forms_storage_dual_write', !empty($_POST['dcb_forms_storage_dual_write']) ? '1' : '0', false);
+
         $min_conf = isset($_POST['dcb_upload_min_confidence']) ? (float) $_POST['dcb_upload_min_confidence'] : 0.45;
         $min_conf = max(0.0, min(1.0, $min_conf));
         update_option('dcb_upload_min_confidence', $min_conf, false);
@@ -158,6 +205,42 @@ final class DCB_Diagnostics {
         update_option('dcb_tutor_mapping', $mapping, false);
 
         wp_safe_redirect(add_query_arg(array('page' => 'dcb-settings', 'updated' => '1'), admin_url('admin.php')));
+        exit;
+    }
+
+    public static function run_storage_migration(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS)) {
+            wp_die('Unauthorized');
+        }
+
+        if (!isset($_POST['dcb_storage_migration_nonce']) || !wp_verify_nonce((string) $_POST['dcb_storage_migration_nonce'], 'dcb_run_storage_migration')) {
+            wp_die('Security check failed');
+        }
+
+        if (!class_exists('DCB_Form_Repository')) {
+            wp_safe_redirect(add_query_arg(array(
+                'page' => 'dcb-settings',
+                'migration_notice' => rawurlencode('Storage repository is unavailable.'),
+            ), admin_url('admin.php')));
+            exit;
+        }
+
+        $target_mode = sanitize_key((string) ($_POST['target_mode'] ?? ''));
+        $dry_run = !empty($_POST['dry_run']);
+        $result = DCB_Form_Repository::migrate_option_to_mode($target_mode, $dry_run);
+
+        $notice = !empty($result['message'])
+            ? sanitize_text_field((string) $result['message'])
+            : 'Migration completed.';
+
+        if (isset($result['migrated'])) {
+            $notice .= ' Rows: ' . (int) $result['migrated'] . '.';
+        }
+
+        wp_safe_redirect(add_query_arg(array(
+            'page' => 'dcb-settings',
+            'migration_notice' => rawurlencode($notice),
+        ), admin_url('admin.php')));
         exit;
     }
 }

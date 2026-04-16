@@ -45,6 +45,10 @@ final class DCB_Settings {
             'dcb_tutor_integration_enabled' => '0',
             'dcb_tutor_mapping' => array(),
             'dcb_forms_storage_mode' => 'option',
+            'dcb_forms_storage_dual_read' => '1',
+            'dcb_forms_storage_dual_write' => '0',
+            'dcb_forms_storage_last_migrated_at' => '',
+            'dcb_forms_storage_last_migrated_target' => '',
         );
     }
 
@@ -70,6 +74,9 @@ final class DCB_Settings {
         register_setting('dcb_settings_group', 'dcb_ocr_confidence_threshold');
         register_setting('dcb_settings_group', 'dcb_tutor_integration_enabled');
         register_setting('dcb_settings_group', 'dcb_tutor_mapping');
+        register_setting('dcb_settings_group', 'dcb_forms_storage_mode');
+        register_setting('dcb_settings_group', 'dcb_forms_storage_dual_read');
+        register_setting('dcb_settings_group', 'dcb_forms_storage_dual_write');
 
         register_setting('dcb_settings_group', 'dcb_upload_accept_mimes', array(
             'type' => 'array',

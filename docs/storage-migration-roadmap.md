@@ -14,6 +14,9 @@ Move to a scalable storage model while preserving current behavior.
 - `DCB_Form_Repository` abstraction added.
 - `dcb_forms_storage_mode` option introduced (`option|cpt|table`).
 - current code reads/writes through repository abstraction where practical.
+- dual-read and optional dual-write toggles added.
+- admin migration utility + WP-CLI migration command added.
+- migration diagnostics/readiness summary added.
 
 ## Recommended migration sequence
 1. **Dual-read phase**

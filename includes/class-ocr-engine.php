@@ -143,6 +143,16 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
         }
 
         $decoded = isset($extract['body']) && is_array($extract['body']) ? $extract['body'] : array();
+        $shape = $this->validate_extract_response_shape($decoded);
+        if (empty($shape['ok'])) {
+            return $this->error_result(
+                'remote_contract_invalid_shape',
+                sanitize_text_field((string) ($shape['message'] ?? 'Remote OCR response shape was invalid.')),
+                $request_id,
+                (int) ($extract['status_code'] ?? 0)
+            );
+        }
+
         $result = isset($decoded['result']) && is_array($decoded['result']) ? $decoded['result'] : $decoded;
         $text = trim((string) ($result['text'] ?? ''));
         $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
@@ -177,6 +187,31 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
                 'contract_version' => $response_contract,
             ),
         );
+    }
+
+    private function validate_extract_response_shape(array $decoded): array {
+        if (isset($decoded['result'])) {
+            if (!is_array($decoded['result'])) {
+                return array('ok' => false, 'message' => 'Result payload is not an object.');
+            }
+            $result = $decoded['result'];
+            if (isset($result['warnings']) && !is_array($result['warnings'])) {
+                return array('ok' => false, 'message' => 'Result warnings must be an array.');
+            }
+            if (isset($result['pages']) && !is_array($result['pages'])) {
+                return array('ok' => false, 'message' => 'Result pages must be an array.');
+            }
+            return array('ok' => true);
+        }
+
+        if (isset($decoded['warnings']) && !is_array($decoded['warnings'])) {
+            return array('ok' => false, 'message' => 'Warnings must be an array.');
+        }
+        if (isset($decoded['pages']) && !is_array($decoded['pages'])) {
+            return array('ok' => false, 'message' => 'Pages must be an array.');
+        }
+
+        return array('ok' => true);
     }
 
     private function auth_header_name(): string {

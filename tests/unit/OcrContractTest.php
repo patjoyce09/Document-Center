@@ -27,4 +27,28 @@ final class OcrContractTest extends TestCase {
         $this->assertSame('dcb-ocr-v1', $caps['contract_version']);
         $this->assertArrayHasKey('auth_header', $caps);
     }
+
+    public function testRemoteExtractRejectsInvalidResponseShape(): void {
+        $tmp = tempnam(sys_get_temp_dir(), 'dcb_ocr_');
+        file_put_contents((string) $tmp, 'sample');
+
+        $GLOBALS['dcb_mock_remote_response'] = array(
+            'response' => array('code' => 200),
+            'body' => wp_json_encode(array(
+                'contract_version' => 'dcb-ocr-v1',
+                'result' => array(
+                    'text' => 'ok',
+                    'warnings' => 'not-an-array',
+                ),
+            )),
+        );
+
+        $engine = new \DCB_OCR_Engine_Remote();
+        $result = $engine->extract((string) $tmp, 'text/plain');
+
+        @unlink((string) $tmp);
+        unset($GLOBALS['dcb_mock_remote_response']);
+
+        $this->assertSame('remote_contract_invalid_shape', (string) ($result['failure_reason'] ?? ''));
+    }
 }
