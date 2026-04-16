@@ -4,27 +4,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-require_once DCB_PLUGIN_DIR . 'includes/class-settings.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-permissions.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-form-repository.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-forms.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-admin.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-assets.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-builder.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-submissions.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-renderer.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-signatures.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-ocr.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-ocr-engine.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-uploader.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-diagnostics.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-workflow.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-integration-tutor.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-migrations.php';
-require_once DCB_PLUGIN_DIR . 'includes/class-cli.php';
-
 final class DCB_Loader {
     private static ?DCB_Loader $instance = null;
+    private static bool $dependencies_loaded = false;
+    private const BOOT_ERROR_OPTION = 'dcb_boot_error';
 
     public static function instance(): DCB_Loader {
         if (!self::$instance) {
@@ -34,6 +17,7 @@ final class DCB_Loader {
     }
 
     public static function activate(): void {
+        self::load_dependencies();
         DCB_Permissions::activate();
         DCB_Settings::activate_defaults();
         DCB_Migrations::activate();
@@ -44,6 +28,16 @@ final class DCB_Loader {
 
     public function boot(): void {
         add_action('plugins_loaded', array($this, 'load_textdomain'));
+
+        try {
+            self::load_dependencies();
+        } catch (\Throwable $e) {
+            update_option(self::BOOT_ERROR_OPTION, sanitize_text_field($e->getMessage()), false);
+            add_action('admin_notices', array(__CLASS__, 'render_boot_error_notice'));
+            return;
+        }
+
+        update_option(self::BOOT_ERROR_OPTION, '', false);
         DCB_Permissions::init();
         DCB_Settings::init();
         DCB_Form_Repository::init();
@@ -65,5 +59,51 @@ final class DCB_Loader {
 
     public function load_textdomain(): void {
         load_plugin_textdomain('document-center-builder', false, dirname(DCB_PLUGIN_BASENAME) . '/languages');
+    }
+
+    private static function load_dependencies(): void {
+        if (self::$dependencies_loaded) {
+            return;
+        }
+
+        $files = array(
+            'includes/class-settings.php',
+            'includes/class-permissions.php',
+            'includes/class-form-repository.php',
+            'includes/class-forms.php',
+            'includes/class-admin.php',
+            'includes/class-assets.php',
+            'includes/class-builder.php',
+            'includes/class-submissions.php',
+            'includes/class-renderer.php',
+            'includes/class-signatures.php',
+            'includes/class-ocr.php',
+            'includes/class-ocr-engine.php',
+            'includes/class-uploader.php',
+            'includes/class-diagnostics.php',
+            'includes/class-workflow.php',
+            'includes/class-integration-tutor.php',
+            'includes/class-migrations.php',
+            'includes/class-cli.php',
+        );
+
+        foreach ($files as $relative) {
+            require_once DCB_PLUGIN_DIR . $relative;
+        }
+
+        self::$dependencies_loaded = true;
+    }
+
+    public static function render_boot_error_notice(): void {
+        if (!function_exists('current_user_can') || !current_user_can('manage_options')) {
+            return;
+        }
+
+        $message = sanitize_text_field((string) get_option(self::BOOT_ERROR_OPTION, ''));
+        if ($message === '') {
+            return;
+        }
+
+        echo '<div class="notice notice-error"><p><strong>Document Center Builder failed to boot:</strong> ' . esc_html($message) . '</p></div>';
     }
 }
