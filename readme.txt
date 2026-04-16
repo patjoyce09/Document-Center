@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.3
+Stable tag: 0.3.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -39,6 +39,11 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.4 =
+* Wrapped admin menu registration in a guarded path to avoid breaking other plugin menus.
+* Added direct dashboard route (`admin.php?page=dcb-direct-dashboard`) as a fallback when sidebar menu is hidden.
+* Added plugin row quick link "Open Document Center" for reliable access.
+
 = 0.3.3 =
 * Added resilient per-module boot guards in loader to prevent dashboard-wide lockouts.
 * Added emergency Document Center menu fallback when normal menu registration is interrupted.

@@ -6,7 +6,22 @@ if (!defined('ABSPATH')) {
 
 final class DCB_Admin {
     public static function init(): void {
-        add_action('admin_menu', array(__CLASS__, 'register_menu'));
+        add_action('admin_menu', array(__CLASS__, 'register_menu_safe'));
+    }
+
+    public static function register_menu_safe(): void {
+        try {
+            self::register_menu();
+        } catch (\Throwable $e) {
+            if (function_exists('error_log')) {
+                error_log('[DCB_ADMIN_MENU_FAILED] ' . wp_json_encode(array(
+                    'message' => sanitize_text_field($e->getMessage()),
+                    'file' => sanitize_text_field($e->getFile()),
+                    'line' => (int) $e->getLine(),
+                ), JSON_UNESCAPED_SLASHES));
+            }
+            update_option('dcb_admin_menu_error', sanitize_text_field($e->getMessage()), false);
+        }
     }
 
     public static function register_menu(): void {
