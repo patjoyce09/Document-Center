@@ -33,6 +33,16 @@ final class DCB_Settings {
             'dcb_policy_attestation_text_version' => 'attestation-default',
             'dcb_brand_label' => 'Document Center Builder',
             'dcb_forms_custom' => array(),
+            'dcb_workflow_default_status' => 'submitted',
+            'dcb_workflow_enable_activity_timeline' => '1',
+            'dcb_ocr_mode' => 'auto',
+            'dcb_ocr_api_base_url' => '',
+            'dcb_ocr_api_key' => '',
+            'dcb_ocr_timeout_seconds' => 30,
+            'dcb_ocr_max_file_size_mb' => 15,
+            'dcb_ocr_confidence_threshold' => 0.45,
+            'dcb_tutor_integration_enabled' => '0',
+            'dcb_tutor_mapping' => array(),
         );
     }
 
@@ -47,6 +57,16 @@ final class DCB_Settings {
         register_setting('dcb_settings_group', 'dcb_policy_consent_text_version');
         register_setting('dcb_settings_group', 'dcb_policy_attestation_text_version');
         register_setting('dcb_settings_group', 'dcb_brand_label');
+        register_setting('dcb_settings_group', 'dcb_workflow_default_status');
+        register_setting('dcb_settings_group', 'dcb_workflow_enable_activity_timeline');
+        register_setting('dcb_settings_group', 'dcb_ocr_mode');
+        register_setting('dcb_settings_group', 'dcb_ocr_api_base_url');
+        register_setting('dcb_settings_group', 'dcb_ocr_api_key');
+        register_setting('dcb_settings_group', 'dcb_ocr_timeout_seconds');
+        register_setting('dcb_settings_group', 'dcb_ocr_max_file_size_mb');
+        register_setting('dcb_settings_group', 'dcb_ocr_confidence_threshold');
+        register_setting('dcb_settings_group', 'dcb_tutor_integration_enabled');
+        register_setting('dcb_settings_group', 'dcb_tutor_mapping');
 
         register_setting('dcb_settings_group', 'dcb_upload_accept_mimes', array(
             'type' => 'array',

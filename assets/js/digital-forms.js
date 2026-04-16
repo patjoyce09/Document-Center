@@ -3,6 +3,10 @@
 
   var cfg = window.DCB_DIGITAL_FORMS || {};
   var forms = cfg.forms || {};
+  var runtime = {
+    activeFormKey: '',
+    activeStepIndex: 0
+  };
 
   function el(tag, attrs, text) {
     var $e = $('<' + tag + '>');
@@ -66,6 +70,68 @@
     return payload;
   }
 
+  function parseArrayJSON(value, fallback) {
+    if (Array.isArray(value)) return value;
+    return fallback || [];
+  }
+
+  function resolveFieldOrder(form) {
+    var fields = Array.isArray(form.fields) ? form.fields : [];
+    var sections = parseArrayJSON(form.sections, []);
+    var ordered = [];
+    var seen = {};
+
+    sections.forEach(function (section) {
+      var keys = Array.isArray(section.field_keys) ? section.field_keys : [];
+      keys.forEach(function (key) {
+        var match = fields.find(function (f) { return String(f.key || '') === String(key || ''); });
+        if (match && !seen[match.key]) {
+          ordered.push(match);
+          seen[match.key] = true;
+        }
+      });
+    });
+
+    fields.forEach(function (f) {
+      if (!seen[f.key]) {
+        ordered.push(f);
+      }
+    });
+
+    return ordered;
+  }
+
+  function buildStepHeader(form, stepIndex) {
+    var steps = parseArrayJSON(form.steps, []);
+    if (!steps.length) return null;
+    var labels = steps.map(function (step, i) {
+      var cls = i === stepIndex ? 'is-active' : '';
+      return '<span class="th-df-step-pill ' + cls + '">' + (step.label || ('Step ' + (i + 1))) + '</span>';
+    });
+    return $('<div class="th-df-steps">' + labels.join('') + '</div>');
+  }
+
+  function fieldAllowedInStep(form, field, stepIndex) {
+    var steps = parseArrayJSON(form.steps, []);
+    if (!steps.length) return true;
+    var sections = parseArrayJSON(form.sections, []);
+    var step = steps[stepIndex] || steps[0] || null;
+    if (!step) return true;
+    var stepSectionKeys = Array.isArray(step.section_keys) ? step.section_keys.map(String) : [];
+    if (!stepSectionKeys.length) return true;
+
+    var inSection = false;
+    sections.forEach(function (section) {
+      var sKey = String(section.key || '');
+      if (!stepSectionKeys.includes(sKey)) return;
+      var keys = Array.isArray(section.field_keys) ? section.field_keys.map(String) : [];
+      if (keys.includes(String(field.key || ''))) {
+        inSection = true;
+      }
+    });
+    return inSection;
+  }
+
   function renderForm(formKey) {
     var form = forms[formKey] || null;
     var $form = $('#th-df-form');
@@ -79,8 +145,10 @@
     $submit.prop('disabled', !form);
 
     if (!form) return;
+    runtime.activeFormKey = formKey;
+    runtime.activeStepIndex = 0;
 
-    var fields = Array.isArray(form.fields) ? form.fields : [];
+    var fields = resolveFieldOrder(form);
 
     $.post(cfg.ajaxUrl, {
       action: 'dcb_get_digital_form_draft',
@@ -88,11 +156,23 @@
       form_key: formKey
     }).done(function (res) {
       var draft = res && res.success && res.data && res.data.draft ? (res.data.draft.fields || {}) : {};
+      var $stepHeader = buildStepHeader(form, runtime.activeStepIndex);
+      if ($stepHeader) $form.append($stepHeader);
+
       fields.forEach(function (field) {
+        if (!fieldAllowedInStep(form, field, runtime.activeStepIndex)) return;
         var v = Object.prototype.hasOwnProperty.call(draft, field.key) ? draft[field.key] : '';
         $form.append(buildField(field, v));
       });
       $form.append('<input type="hidden" name="signature_mode" value="typed"/>');
+
+      var steps = parseArrayJSON(form.steps, []);
+      if (steps.length > 1) {
+        $form.append('<div class="th-df-step-actions">'
+          + '<button type="button" class="th-df-btn th-df-prev-step" disabled>Previous</button>'
+          + '<button type="button" class="th-df-btn th-df-next-step">Next</button>'
+          + '</div>');
+      }
     });
   }
 
@@ -129,6 +209,21 @@
           fields: JSON.stringify(collectFields($form))
         });
       }, 500);
+    });
+
+    $form.on('click', '.th-df-next-step, .th-df-prev-step', function () {
+      var form = forms[runtime.activeFormKey] || null;
+      if (!form) return;
+      var steps = parseArrayJSON(form.steps, []);
+      if (!steps.length) return;
+
+      if ($(this).hasClass('th-df-next-step')) {
+        runtime.activeStepIndex = Math.min(steps.length - 1, runtime.activeStepIndex + 1);
+      } else {
+        runtime.activeStepIndex = Math.max(0, runtime.activeStepIndex - 1);
+      }
+
+      renderForm(runtime.activeFormKey);
     });
 
     $('#th-df-submit').on('click', function () {

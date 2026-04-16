@@ -16,6 +16,7 @@ final class DCB_Forms {
         }
 
         $forms = dcb_form_definitions();
+        $user_id = get_current_user_id();
         ob_start();
         ?>
         <div class="th-df-wrap" id="th-df-wrap">
@@ -27,6 +28,12 @@ final class DCB_Forms {
                 <select id="th-df-form-key" class="th-df-select">
                     <option value="">Choose a form...</option>
                     <?php foreach ($forms as $key => $form) : ?>
+                        <?php
+                        $can_access = apply_filters('dcb_submission_access_allowed', true, (string) $key, $user_id, array('source' => 'portal_list'));
+                        if (!$can_access) {
+                            continue;
+                        }
+                        ?>
                         <option value="<?php echo esc_attr((string) $key); ?>"><?php echo esc_html((string) ($form['label'] ?? $key)); ?></option>
                     <?php endforeach; ?>
                 </select>

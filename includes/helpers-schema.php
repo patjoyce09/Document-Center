@@ -471,6 +471,103 @@ function dcb_normalize_ocr_review($review): array {
     return $out;
 }
 
+function dcb_normalize_sections($sections): array {
+    if (!is_array($sections)) {
+        return array();
+    }
+    $out = array();
+    foreach ($sections as $section) {
+        if (!is_array($section)) {
+            continue;
+        }
+        $key = sanitize_key((string) ($section['key'] ?? ''));
+        $label = sanitize_text_field((string) ($section['label'] ?? ''));
+        if ($key === '' || $label === '') {
+            continue;
+        }
+        $field_keys = array_values(array_filter(array_map('sanitize_key', (array) ($section['field_keys'] ?? array()))));
+        $out[] = array('key' => $key, 'label' => $label, 'field_keys' => $field_keys);
+    }
+    return $out;
+}
+
+function dcb_normalize_steps($steps): array {
+    if (!is_array($steps)) {
+        return array();
+    }
+    $out = array();
+    foreach ($steps as $step) {
+        if (!is_array($step)) {
+            continue;
+        }
+        $key = sanitize_key((string) ($step['key'] ?? ''));
+        $label = sanitize_text_field((string) ($step['label'] ?? ''));
+        if ($key === '' || $label === '') {
+            continue;
+        }
+        $section_keys = array_values(array_filter(array_map('sanitize_key', (array) ($step['section_keys'] ?? array()))));
+        $out[] = array('key' => $key, 'label' => $label, 'section_keys' => $section_keys);
+    }
+    return $out;
+}
+
+function dcb_normalize_repeaters($repeaters): array {
+    if (!is_array($repeaters)) {
+        return array();
+    }
+    $out = array();
+    foreach ($repeaters as $repeater) {
+        if (!is_array($repeater)) {
+            continue;
+        }
+        $key = sanitize_key((string) ($repeater['key'] ?? ''));
+        $label = sanitize_text_field((string) ($repeater['label'] ?? ''));
+        if ($key === '' || $label === '') {
+            continue;
+        }
+        $field_keys = array_values(array_filter(array_map('sanitize_key', (array) ($repeater['field_keys'] ?? array()))));
+        $min = max(0, (int) ($repeater['min'] ?? 0));
+        $max = max($min, (int) ($repeater['max'] ?? max(1, $min + 4)));
+        $out[] = array('key' => $key, 'label' => $label, 'field_keys' => $field_keys, 'min' => $min, 'max' => $max);
+    }
+    return $out;
+}
+
+function dcb_normalize_routing_rules($rules): array {
+    if (!is_array($rules)) {
+        return array();
+    }
+    $out = array();
+    foreach ($rules as $rule) {
+        if (!is_array($rule)) {
+            continue;
+        }
+        $name = sanitize_text_field((string) ($rule['name'] ?? 'Rule'));
+        $queue = sanitize_key((string) ($rule['queue'] ?? 'default'));
+        $when = isset($rule['when']) && is_array($rule['when']) ? $rule['when'] : array();
+        $clean_when = array();
+        foreach ($when as $condition) {
+            if (!is_array($condition)) {
+                continue;
+            }
+            $clean = dcb_normalize_condition($condition);
+            if ($clean !== null) {
+                $clean_when[] = $clean;
+            }
+        }
+        $assignee_role = sanitize_key((string) ($rule['assignee_role'] ?? ''));
+        $notify = dcb_parse_emails((string) ($rule['notify'] ?? ''));
+        $out[] = array(
+            'name' => $name,
+            'queue' => $queue,
+            'when' => $clean_when,
+            'assignee_role' => $assignee_role,
+            'notify' => $notify,
+        );
+    }
+    return $out;
+}
+
 function dcb_normalize_single_form(array $form): ?array {
     $label = sanitize_text_field((string) ($form['label'] ?? ''));
     $recipients = sanitize_text_field((string) ($form['recipients'] ?? ''));
@@ -588,6 +685,12 @@ function dcb_normalize_single_form(array $form): ?array {
         'template_blocks' => $template_blocks,
         'fields' => $normalized_fields,
         'hard_stops' => $normalized_hard_stops,
+        'sections' => dcb_normalize_sections($form['sections'] ?? array()),
+        'steps' => dcb_normalize_steps($form['steps'] ?? array()),
+        'repeaters' => dcb_normalize_repeaters($form['repeaters'] ?? array()),
+        'routing_rules' => dcb_normalize_routing_rules($form['routing_rules'] ?? array()),
+        'required_bundles' => array_values(array_filter(array_map('sanitize_text_field', (array) ($form['required_bundles'] ?? array())))),
+        'notification_triggers' => array_values(array_filter(array_map('sanitize_key', (array) ($form['notification_triggers'] ?? array())))),
     );
 
     $raw_document_nodes = isset($form['document_nodes']) && is_array($form['document_nodes']) ? $form['document_nodes'] : array();
@@ -715,6 +818,12 @@ function dcb_structural_signature_payload(array $form): array {
         'document_nodes' => $clean_document_nodes,
         'fields' => $clean_fields,
         'hard_stops' => $clean_hard_stops,
+        'sections' => dcb_normalize_sections($form['sections'] ?? array()),
+        'steps' => dcb_normalize_steps($form['steps'] ?? array()),
+        'repeaters' => dcb_normalize_repeaters($form['repeaters'] ?? array()),
+        'routing_rules' => dcb_normalize_routing_rules($form['routing_rules'] ?? array()),
+        'required_bundles' => array_values(array_filter(array_map('sanitize_text_field', (array) ($form['required_bundles'] ?? array())))),
+        'notification_triggers' => array_values(array_filter(array_map('sanitize_key', (array) ($form['notification_triggers'] ?? array())))),
     );
 }
 
@@ -799,6 +908,12 @@ function dcb_form_definitions(bool $for_js = false): array {
                 );
             }, (array) ($form['fields'] ?? array()))),
             'hardStops' => isset($form['hard_stops']) && is_array($form['hard_stops']) ? $form['hard_stops'] : array(),
+            'sections' => isset($form['sections']) && is_array($form['sections']) ? $form['sections'] : array(),
+            'steps' => isset($form['steps']) && is_array($form['steps']) ? $form['steps'] : array(),
+            'repeaters' => isset($form['repeaters']) && is_array($form['repeaters']) ? $form['repeaters'] : array(),
+            'routingRules' => isset($form['routing_rules']) && is_array($form['routing_rules']) ? $form['routing_rules'] : array(),
+            'requiredBundles' => isset($form['required_bundles']) && is_array($form['required_bundles']) ? $form['required_bundles'] : array(),
+            'notificationTriggers' => isset($form['notification_triggers']) && is_array($form['notification_triggers']) ? $form['notification_triggers'] : array(),
             'ocrReview' => isset($form['ocr_review']) && is_array($form['ocr_review']) ? $form['ocr_review'] : array(),
         );
     }

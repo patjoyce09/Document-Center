@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.1.0
+Stable tag: 0.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -12,14 +12,17 @@ Standalone reusable digital document/form plugin extracted from TherapyHub core 
 
 == Description ==
 Document Center Builder provides:
-- Digital form definitions
-- Admin visual builder
-- Conditional logic + hard stops
-- OCR-assisted draft generation
-- Ordered document nodes + template blocks
-- Submission storage + signature evidence
-- OCR diagnostics and local binary checks
-- Generic upload portal + OCR routing
+- Digital form definitions with sections/steps/repeaters schema
+- Upgraded admin visual builder (create/duplicate/import/export tools)
+- Conditional logic + hard stops + validation workflow
+- OCR-assisted draft generation with provider abstraction (local/remote/auto)
+- Remote OCR API mode over HTTPS with API key auth (no SSH)
+- Ordered document nodes + template blocks + output template metadata
+- Workflow statuses, assignees, queues, and activity timeline
+- Submission storage + signature evidence + finalization metadata
+- OCR diagnostics, capability checks, and OCR review queue
+- Generic upload portal + routing rules
+- Optional Tutor LMS integration layer (isolated module)
 
 == Installation ==
 1. Upload the plugin folder.
@@ -32,5 +35,15 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.0 =
+* Added migration/version runner.
+* Added workflow engine scaffold with status transitions, assignees, timeline, and queue metadata.
+* Added OCR provider architecture with local/remote/auto modes.
+* Added remote OCR HTTPS API integration with API key auth and timeout/max-size settings.
+* Added OCR review queue post type and provenance/failure metadata.
+* Added PDF export adapter boundary via filter hook.
+* Added optional Tutor LMS integration module and mapping settings.
+* Upgraded builder UX with duplicate/import/export and schema editing surfaces.
+
 = 0.1.0 =
 * Initial extraction scaffold.

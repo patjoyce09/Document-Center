@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  php-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+      - name: Lint PHP files
+        run: |
+          find . -type f -name "*.php" -not -path "*/vendor/*" -print0 | xargs -0 -n1 php -l
+      - name: Run smoke tests
+        run: |
+          php tests/schema_smoke.php
+          php tests/workflow_smoke.php
+          php tests/ocr_engine_smoke.php
+
+  js-sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JS parseability
+        run: |
+          node --version
+          for f in assets/js/*.js; do
+            node -e "new Function(require('fs').readFileSync('$f','utf8'));"
+          done

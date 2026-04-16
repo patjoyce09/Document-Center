@@ -726,7 +726,7 @@ function dcb_upload_stage_merge_pages(array $primary_pages, array $fallback_page
     return array_values($merged);
 }
 
-function dcb_upload_extract_text_from_file(string $file_path, string $mime): array {
+function dcb_upload_extract_text_from_file_local(string $file_path, string $mime): array {
     $GLOBALS['dcb_upload_runtime_ocr_warnings'] = array();
 
     $inspection = dcb_upload_stage_file_type_inspection($file_path, $mime);
@@ -806,6 +806,66 @@ function dcb_upload_extract_text_from_file(string $file_path, string $mime): arr
         'warnings' => $warnings,
         'stages' => array('file_type_inspection', 'text_extraction', 'page_rasterization', 'ocr_fallback'),
     );
+}
+
+function dcb_upload_extract_text_from_file(string $file_path, string $mime): array {
+    if (class_exists('DCB_OCR_Engine_Manager')) {
+        $result = DCB_OCR_Engine_Manager::extract($file_path, $mime);
+        dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
+        return $result;
+    }
+
+    $result = dcb_upload_extract_text_from_file_local($file_path, $mime);
+    dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
+    return $result;
+}
+
+function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, array $result): void {
+    $confidence = 0.0;
+    $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
+    if (!empty($pages)) {
+        $total = 0.0;
+        $count = 0;
+        foreach ($pages as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            $total += (float) ($page['confidence_proxy'] ?? 0);
+            $count++;
+        }
+        if ($count > 0) {
+            $confidence = $total / $count;
+        }
+    }
+
+    if ($confidence <= 0.0 && isset($result['confidence_proxy']) && is_numeric($result['confidence_proxy'])) {
+        $confidence = (float) $result['confidence_proxy'];
+    }
+
+    $threshold = max(0.0, min(1.0, (float) get_option('dcb_ocr_confidence_threshold', 0.45)));
+    $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
+    $needs_review = $failure_reason !== '' || $confidence < $threshold;
+    if (!$needs_review) {
+        return;
+    }
+
+    $title = sprintf('OCR Review: %s', sanitize_file_name((string) basename($file_path)));
+    $post_id = wp_insert_post(array(
+        'post_type' => 'dcb_ocr_review_queue',
+        'post_status' => 'publish',
+        'post_title' => $title . ' — ' . current_time('mysql'),
+    ));
+    if (is_wp_error($post_id) || (int) $post_id < 1) {
+        return;
+    }
+
+    update_post_meta((int) $post_id, '_dcb_ocr_review_file', sanitize_text_field((string) basename($file_path)));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_mime', sanitize_text_field($mime));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_confidence', round(max(0.0, min(1.0, $confidence)), 4));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_threshold', $threshold);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_failure_reason', $failure_reason !== '' ? $failure_reason : 'low_confidence');
+    update_post_meta((int) $post_id, '_dcb_ocr_review_provider', sanitize_key((string) ($result['provider'] ?? 'local')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_provenance', wp_json_encode((array) ($result['provenance'] ?? array())));
 }
 
 function dcb_upload_stage_line_block_normalization(array $pages): array {
@@ -1269,7 +1329,7 @@ function dcb_ocr_collect_environment_diagnostics(): array {
         $status = 'partial';
     }
 
-    return array(
+    $out = array(
         'status' => $status,
         'shell_exec_enabled' => $shell_enabled,
         'checks' => $checks,
@@ -1278,9 +1338,18 @@ function dcb_ocr_collect_environment_diagnostics(): array {
         'readiness' => array('text_pdf' => $text_pdf_ready, 'image_ocr' => $image_ocr_ready, 'scanned_pdf' => $scanned_pdf_ready),
         'warnings' => array_values(array_unique($warnings)),
     );
+
+    if (class_exists('DCB_OCR_Engine_Manager')) {
+        $out['provider_diagnostics'] = DCB_OCR_Engine_Manager::diagnostics();
+    }
+
+    return $out;
 }
 
-function dcb_ocr_smoke_validation(array $diag): array {
+function dcb_ocr_smoke_validation(?array $diag = null): array {
+    if ($diag === null) {
+        $diag = dcb_ocr_collect_environment_diagnostics();
+    }
     $checks = isset($diag['checks']) && is_array($diag['checks']) ? $diag['checks'] : array();
     $readiness = isset($diag['readiness']) && is_array($diag['readiness']) ? $diag['readiness'] : array();
     $langs = isset($diag['tesseract_languages']) && is_array($diag['tesseract_languages']) ? $diag['tesseract_languages'] : array();

@@ -158,6 +158,16 @@ function dcb_normalize_submission_payload(int $submission_id): array {
     }
 
     $final_document_title = sprintf('%s — Final Submission #%d', $form_label !== '' ? $form_label : 'Digital Form', $submission_id);
+    $workflow_status = sanitize_key((string) get_post_meta($submission_id, '_dcb_workflow_status', true));
+    if ($workflow_status === '') {
+        $workflow_status = 'submitted';
+    }
+    $workflow_assignee = (int) get_post_meta($submission_id, '_dcb_workflow_assignee_user_id', true);
+    $workflow_timeline = get_post_meta($submission_id, '_dcb_workflow_timeline', true);
+    if (!is_array($workflow_timeline)) {
+        $workflow_timeline = array();
+    }
+
     $normalized = array(
         'submission_id' => $submission_id,
         'form_key' => $form_key,
@@ -185,6 +195,16 @@ function dcb_normalize_submission_payload(int $submission_id): array {
             'attestation_text_version' => $attestation_text_version,
         ),
         'payload_hash' => (string) get_post_meta($submission_id, '_dcb_form_payload_hash', true),
+        'workflow' => array(
+            'status' => $workflow_status,
+            'assignee_user_id' => $workflow_assignee,
+            'timeline_count' => count($workflow_timeline),
+        ),
+        'finalization' => array(
+            'finalized_at' => (string) get_post_meta($submission_id, '_dcb_form_finalized_at', true),
+            'finalized_by' => (int) get_post_meta($submission_id, '_dcb_form_finalized_by', true),
+            'output_template' => 'dcb-digital-form-v1',
+        ),
     );
 
     return array(
@@ -359,6 +379,9 @@ function dcb_render_submission_html(int $submission_id, string $view = 'admin'):
     $wrapper_class = $view === 'print' ? 'dcb-submission-print-wrap' : 'dcb-submission-admin-wrap';
     $html = '<div class="' . esc_attr($wrapper_class) . '">';
     $html .= '<h2>' . esc_html((string) ($payload['final_document_title'] ?? 'Digital Form Submission')) . '</h2>';
+    $workflow_status = sanitize_key((string) ($normalized['workflow']['status'] ?? 'submitted'));
+    $status_label = strtoupper(str_replace('_', ' ', $workflow_status));
+    $html .= '<p><span style="display:inline-block;padding:4px 8px;border:1px solid #c8d4e8;border-radius:999px;background:#f5f8fc;font-size:12px;font-weight:700;letter-spacing:.02em;">STATUS: ' . esc_html($status_label) . '</span></p>';
     $html .= '<p><strong>Form:</strong> ' . esc_html((string) ($normalized['form_name'] ?? '')) . ' <strong style="margin-left:8px;">Version:</strong> ' . esc_html((string) ($normalized['form_version'] ?? 1)) . '</p>';
     $html .= '<p><strong>Submitter:</strong> ' . esc_html((string) (($normalized['submitter']['name'] ?? '') ?: ($normalized['submitter']['email'] ?? 'Unknown'))) . '</p>';
     $html .= '<p><strong>Submitted:</strong> ' . esc_html((string) ($normalized['submitted_timestamp'] ?? '')) . '</p>';
@@ -391,6 +414,7 @@ function dcb_finalize_submission_output(int $submission_id, int $finalized_by = 
     update_post_meta($submission_id, '_dcb_form_final_document_title', (string) ($payload['final_document_title'] ?? 'Digital Form Submission'));
     update_post_meta($submission_id, '_dcb_form_normalized_export', wp_json_encode((array) ($payload['normalized_submission_data'] ?? array())));
     update_post_meta($submission_id, '_dcb_form_render_template_mapping', wp_json_encode((array) ($payload['render_template_mapping'] ?? array())));
+    update_post_meta($submission_id, '_dcb_output_template_key', 'dcb-digital-form-v1');
 }
 
 function dcb_send_submission_notification(int $submission_id): array {
@@ -407,6 +431,46 @@ function dcb_send_submission_notification(int $submission_id): array {
     $payload_hash = (string) ($normalized['payload_hash'] ?? '');
 
     $recipients = dcb_parse_emails((string) ($form['recipients'] ?? ''));
+    $routing_rules = isset($form['routing_rules']) && is_array($form['routing_rules']) ? $form['routing_rules'] : array();
+    $field_values = array();
+    foreach ((array) ($normalized['fields'] ?? array()) as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $f_key = sanitize_key((string) ($row['key'] ?? ''));
+        if ($f_key === '') {
+            continue;
+        }
+        $field_values[$f_key] = (string) ($row['value'] ?? '');
+    }
+
+    $queue = 'default';
+    $assignee_role = '';
+    foreach ($routing_rules as $rule) {
+        if (!is_array($rule)) {
+            continue;
+        }
+        $conditions = isset($rule['when']) && is_array($rule['when']) ? $rule['when'] : array();
+        $matched = true;
+        foreach ($conditions as $condition) {
+            if (is_array($condition) && !dcb_condition_matches($condition, $field_values)) {
+                $matched = false;
+                break;
+            }
+        }
+        if (!$matched) {
+            continue;
+        }
+
+        $notify = isset($rule['notify']) && is_array($rule['notify']) ? $rule['notify'] : array();
+        if (!empty($notify)) {
+            $recipients = array_values(array_unique(array_merge($recipients, array_map('sanitize_email', $notify))));
+        }
+        $queue = sanitize_key((string) ($rule['queue'] ?? 'default'));
+        $assignee_role = sanitize_key((string) ($rule['assignee_role'] ?? ''));
+        break;
+    }
+
     if (empty($recipients)) {
         $recipients = dcb_parse_emails((string) get_option('dcb_upload_default_recipients', ''));
     }
@@ -426,6 +490,19 @@ function dcb_send_submission_notification(int $submission_id): array {
     $sent = wp_mail($recipients, $subject, $body);
     update_post_meta($submission_id, '_dcb_form_emailed_to', implode(', ', $recipients));
     update_post_meta($submission_id, '_dcb_form_email_status', $sent ? 'sent' : 'failed');
+    update_post_meta($submission_id, '_dcb_workflow_queue', $queue);
+    if ($assignee_role !== '') {
+        update_post_meta($submission_id, '_dcb_workflow_assignee_role', $assignee_role);
+    }
+
+    if (class_exists('DCB_Workflow')) {
+        DCB_Workflow::add_timeline($submission_id, 'notification_sent', array(
+            'queue' => $queue,
+            'assignee_role' => $assignee_role,
+            'recipient_count' => count($recipients),
+            'email_status' => $sent ? 'sent' : 'failed',
+        ));
+    }
 
     return array('sent' => $sent, 'recipients' => $recipients, 'subject' => $subject);
 }

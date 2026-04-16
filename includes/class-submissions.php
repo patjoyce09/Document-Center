@@ -41,6 +41,17 @@ final class DCB_Submissions {
             'show_in_menu' => false,
             'supports' => array('title'),
         ));
+
+        register_post_type('dcb_ocr_review_queue', array(
+            'labels' => array(
+                'name' => __('OCR Review Queue', 'document-center-builder'),
+                'singular_name' => __('OCR Review Item', 'document-center-builder'),
+            ),
+            'public' => false,
+            'show_ui' => true,
+            'show_in_menu' => false,
+            'supports' => array('title'),
+        ));
     }
 
     public static function draft_meta_key(string $form_key): string {
@@ -100,6 +111,11 @@ final class DCB_Submissions {
         $raw_fields = json_decode($fields_json, true);
         if (!is_array($raw_fields)) {
             $raw_fields = array();
+        }
+
+        $access_allowed = apply_filters('dcb_submission_access_allowed', true, $form_key, get_current_user_id(), array('source' => 'submit_ajax'));
+        if (!$access_allowed) {
+            wp_send_json_error(array('message' => 'Access denied for this form. Prerequisites were not met.'), 403);
         }
 
         $policy_versions = dcb_get_policy_versions();
@@ -162,6 +178,11 @@ final class DCB_Submissions {
         update_post_meta((int) $submission_id, '_dcb_form_qa_passed', '1');
         update_post_meta((int) $submission_id, '_dcb_form_consent_text_version', $consent_text_version !== '' ? $consent_text_version : $policy_versions['consent_text_version']);
         update_post_meta((int) $submission_id, '_dcb_form_attestation_text_version', $attestation_text_version !== '' ? $attestation_text_version : $policy_versions['attestation_text_version']);
+        update_post_meta((int) $submission_id, '_dcb_workflow_status', 'submitted');
+        update_post_meta((int) $submission_id, '_dcb_workflow_assignee_user_id', 0);
+        if (class_exists('DCB_Workflow')) {
+            DCB_Workflow::add_timeline((int) $submission_id, 'submitted', array('form_key' => $form_key));
+        }
 
         $ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field((string) wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
         $ua = isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field((string) wp_unslash($_SERVER['HTTP_USER_AGENT'])) : '';
@@ -198,7 +219,11 @@ final class DCB_Submissions {
         update_post_meta((int) $submission_id, '_dcb_form_esign_evidence', wp_json_encode($esign_evidence));
 
         dcb_finalize_submission_output((int) $submission_id, $user_id);
+        if (class_exists('DCB_Workflow')) {
+            DCB_Workflow::set_status((int) $submission_id, 'in_review', 'Submission finalized and routed for review.');
+        }
         dcb_send_submission_notification((int) $submission_id);
+        do_action('dcb_submission_completed', (int) $submission_id, $form_key, $user_id);
 
         delete_user_meta($user_id, self::draft_meta_key($form_key));
 
@@ -229,6 +254,8 @@ final class DCB_Submissions {
             'title' => __('Record', 'document-center-builder'),
             'dcb_form_name' => __('Form', 'document-center-builder'),
             'dcb_form_version' => __('Version', 'document-center-builder'),
+            'dcb_workflow_status' => __('Workflow', 'document-center-builder'),
+            'dcb_workflow_assignee' => __('Assignee', 'document-center-builder'),
             'dcb_submitter' => __('Submitter', 'document-center-builder'),
             'dcb_submitted_at' => __('Submitted', 'document-center-builder'),
             'dcb_signature_mode' => __('Signature Mode', 'document-center-builder'),
@@ -249,6 +276,23 @@ final class DCB_Submissions {
                 $name = (string) get_post_meta($post_id, '_dcb_form_submitted_by_name', true);
                 $email = (string) get_post_meta($post_id, '_dcb_form_submitted_by_email', true);
                 echo esc_html($name !== '' ? $name : $email);
+                break;
+            case 'dcb_workflow_status':
+                $status = sanitize_key((string) get_post_meta($post_id, '_dcb_workflow_status', true));
+                if ($status === '') {
+                    $status = 'submitted';
+                }
+                $statuses = class_exists('DCB_Workflow') ? DCB_Workflow::statuses() : array();
+                echo esc_html((string) ($statuses[$status] ?? $status));
+                break;
+            case 'dcb_workflow_assignee':
+                $assignee = (int) get_post_meta($post_id, '_dcb_workflow_assignee_user_id', true);
+                if ($assignee < 1) {
+                    echo '—';
+                    break;
+                }
+                $user = get_user_by('id', $assignee);
+                echo esc_html($user instanceof WP_User ? (string) $user->display_name : ('User #' . $assignee));
                 break;
             case 'dcb_submitted_at':
                 echo esc_html((string) get_post_meta($post_id, '_dcb_form_submitted_at', true));
@@ -271,6 +315,7 @@ final class DCB_Submissions {
         $submission_id = (int) $post->ID;
         $actions['dcb_print'] = '<a href="' . esc_url(DCB_Renderer::submission_print_url($submission_id)) . '">Print</a>';
         $actions['dcb_export'] = '<a href="' . esc_url(DCB_Renderer::submission_export_url($submission_id)) . '">Export JSON</a>';
+        $actions['dcb_export_pdf'] = '<a href="' . esc_url(DCB_Renderer::submission_export_pdf_url($submission_id)) . '">Export PDF</a>';
 
         return $actions;
     }

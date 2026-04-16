@@ -32,20 +32,36 @@ final class DCB_OCR {
         $diag = dcb_ocr_collect_environment_diagnostics();
         $warnings = isset($diag['warnings']) && is_array($diag['warnings']) ? $diag['warnings'] : array();
         $languages = isset($diag['tesseract_languages']) && is_array($diag['tesseract_languages']) ? $diag['tesseract_languages'] : array();
+        $checks = isset($diag['checks']) && is_array($diag['checks']) ? $diag['checks'] : array();
+        $provider_diag = isset($diag['provider_diagnostics']) && is_array($diag['provider_diagnostics']) ? $diag['provider_diagnostics'] : array();
         $logs = dcb_upload_ocr_debug_log_recent(10);
 
         echo '<div class="wrap">';
         echo '<h1>OCR Diagnostics</h1>';
-        echo '<p>Environment readiness and runtime diagnostics for local OCR binaries.</p>';
+        echo '<p>Environment readiness and runtime diagnostics for local/remote OCR providers (HTTPS API supported, no SSH).</p>';
 
         echo '<table class="widefat striped" style="max-width:920px">';
         echo '<tbody>';
         echo '<tr><th style="width:240px">Overall Status</th><td><strong>' . esc_html((string) ($diag['status'] ?? 'unknown')) . '</strong></td></tr>';
-        echo '<tr><th>Tesseract</th><td>' . esc_html((string) ($diag['binaries']['tesseract']['path'] ?? 'Not found')) . '</td></tr>';
-        echo '<tr><th>pdftotext</th><td>' . esc_html((string) ($diag['binaries']['pdftotext']['path'] ?? 'Not found')) . '</td></tr>';
-        echo '<tr><th>pdftoppm</th><td>' . esc_html((string) ($diag['binaries']['pdftoppm']['path'] ?? 'Not found')) . '</td></tr>';
+        echo '<tr><th>Tesseract</th><td>' . esc_html((string) ($checks['tesseract']['path'] ?? 'Not found')) . '</td></tr>';
+        echo '<tr><th>pdftotext</th><td>' . esc_html((string) ($checks['pdftotext']['path'] ?? 'Not found')) . '</td></tr>';
+        echo '<tr><th>pdftoppm</th><td>' . esc_html((string) ($checks['pdftoppm']['path'] ?? 'Not found')) . '</td></tr>';
         echo '<tr><th>Tesseract Languages</th><td>' . esc_html(implode(', ', $languages)) . '</td></tr>';
+        echo '<tr><th>OCR Mode</th><td>' . esc_html((string) ($provider_diag['mode'] ?? 'local')) . ' (active: ' . esc_html((string) ($provider_diag['active'] ?? 'local')) . ')</td></tr>';
         echo '</tbody></table>';
+
+        if (!empty($provider_diag['engines']) && is_array($provider_diag['engines'])) {
+            echo '<h2>Provider Capabilities</h2><ul style="list-style:disc;padding-left:18px;">';
+            foreach ($provider_diag['engines'] as $slug => $caps) {
+                if (!is_array($caps)) {
+                    continue;
+                }
+                $ready = !empty($caps['ready']) ? 'ready' : 'not ready';
+                $status_text = sanitize_text_field((string) ($caps['status'] ?? 'unknown'));
+                echo '<li><strong>' . esc_html((string) $slug) . '</strong>: ' . esc_html($ready . ' (' . $status_text . ')') . '</li>';
+            }
+            echo '</ul>';
+        }
 
         if (!empty($warnings)) {
             echo '<h2>Warnings</h2><ul style="list-style:disc;padding-left:18px;">';
@@ -56,7 +72,7 @@ final class DCB_OCR {
         }
 
         echo '<h2>Smoke Validation</h2>';
-        $smoke = dcb_ocr_smoke_validation();
+        $smoke = dcb_ocr_smoke_validation($diag);
         echo '<p><strong>' . esc_html(!empty($smoke['ok']) ? 'OK' : 'Failed') . '</strong></p>';
         if (!empty($smoke['messages']) && is_array($smoke['messages'])) {
             echo '<ul style="list-style:disc;padding-left:18px;">';
