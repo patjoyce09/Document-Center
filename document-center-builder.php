@@ -105,8 +105,65 @@ if (!function_exists('dcb_plugin_action_links')) {
     }
 }
 
+if (!function_exists('dcb_plugin_action_links_global')) {
+    function dcb_plugin_action_links_global(array $actions, string $plugin_file): array {
+        if (!current_user_can('read')) {
+            return $actions;
+        }
+
+        if (strpos($plugin_file, 'document-center-builder.php') === false) {
+            return $actions;
+        }
+
+        if (!isset($actions['dcb_open'])) {
+            $actions['dcb_open'] = '<a href="' . esc_url(admin_url('admin.php?page=dcb-dashboard')) . '">Open Document Center</a>';
+        }
+
+        return $actions;
+    }
+}
+
+if (!function_exists('dcb_register_tools_fallback_menu')) {
+    function dcb_register_tools_fallback_menu(): void {
+        if (!current_user_can('read')) {
+            return;
+        }
+
+        add_management_page(
+            __('Document Center', 'document-center-builder'),
+            __('Document Center', 'document-center-builder'),
+            'read',
+            'dcb-dashboard',
+            'dcb_render_recovery_dashboard'
+        );
+    }
+}
+
+if (!function_exists('dcb_plugins_screen_quick_notice')) {
+    function dcb_plugins_screen_quick_notice(): void {
+        if (!current_user_can('read')) {
+            return;
+        }
+
+        if (!function_exists('get_current_screen')) {
+            return;
+        }
+
+        $screen = get_current_screen();
+        if (!$screen || (string) ($screen->id ?? '') !== 'plugins') {
+            return;
+        }
+
+        $url = admin_url('admin.php?page=dcb-dashboard');
+        echo '<div class="notice notice-info"><p><strong>Document Center:</strong> <a href="' . esc_url($url) . '">Open Dashboard</a></p></div>';
+    }
+}
+
 add_action('admin_menu', 'dcb_register_recovery_menu', 999);
+add_action('admin_menu', 'dcb_register_tools_fallback_menu', 999);
 add_filter('plugin_action_links_' . DCB_PLUGIN_BASENAME, 'dcb_plugin_action_links');
+add_filter('plugin_action_links', 'dcb_plugin_action_links_global', 10, 2);
+add_action('admin_notices', 'dcb_plugins_screen_quick_notice');
 
 register_activation_hook(__FILE__, array('DCB_Loader', 'activate'));
 
