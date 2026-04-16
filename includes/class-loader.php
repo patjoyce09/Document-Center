@@ -9,6 +9,7 @@ final class DCB_Loader {
     private static bool $dependencies_loaded = false;
     private const BOOT_ERROR_OPTION = 'dcb_boot_error';
     private const BOOT_TRACE_OPTION = 'dcb_boot_trace';
+    private const SAFE_MODE_OPTION = 'dcb_safe_mode';
 
     public static function instance(): DCB_Loader {
         if (!self::$instance) {
@@ -29,6 +30,16 @@ final class DCB_Loader {
 
     public function boot(): void {
         add_action('plugins_loaded', array($this, 'load_textdomain'));
+        self::maybe_handle_safe_mode_toggle();
+
+        if (self::safe_mode_enabled()) {
+            $trace = self::new_boot_trace();
+            $trace['status'] = 'safe_mode';
+            $trace['completed_at'] = self::now_mysql();
+            self::persist_boot_trace($trace);
+            add_action('admin_notices', array(__CLASS__, 'render_boot_error_notice'));
+            return;
+        }
 
         $trace = self::new_boot_trace();
 
@@ -224,6 +235,41 @@ final class DCB_Loader {
         return function_exists('current_time') ? (string) current_time('mysql') : gmdate('Y-m-d H:i:s');
     }
 
+    private static function maybe_handle_safe_mode_toggle(): void {
+        if (!function_exists('is_admin') || !is_admin()) {
+            return;
+        }
+
+        $toggle = isset($_GET['dcb_safe_mode']) ? sanitize_key((string) $_GET['dcb_safe_mode']) : '';
+        if ($toggle !== 'off') {
+            return;
+        }
+
+        if (!function_exists('current_user_can') || !current_user_can('activate_plugins')) {
+            return;
+        }
+
+        $nonce = isset($_GET['_dcbnonce']) ? sanitize_text_field((string) $_GET['_dcbnonce']) : '';
+        if (!function_exists('wp_verify_nonce') || !wp_verify_nonce($nonce, 'dcb_safe_mode_off')) {
+            return;
+        }
+
+        update_option(self::SAFE_MODE_OPTION, '0', false);
+        update_option(self::BOOT_ERROR_OPTION, '', false);
+    }
+
+    public static function safe_mode_enabled(): bool {
+        return get_option(self::SAFE_MODE_OPTION, '0') === '1';
+    }
+
+    public static function safe_mode_disable_url(): string {
+        $base = admin_url('tools.php?page=dcb-recovery-dashboard&dcb_safe_mode=off');
+        if (!function_exists('wp_create_nonce')) {
+            return $base;
+        }
+        return add_query_arg(array('_dcbnonce' => wp_create_nonce('dcb_safe_mode_off')), $base);
+    }
+
     public static function get_boot_trace(): array {
         $trace = get_option(self::BOOT_TRACE_OPTION, array());
         return is_array($trace) ? $trace : array();
@@ -243,6 +289,7 @@ final class DCB_Loader {
         echo '<tbody>';
         echo '<tr><th style="width:240px">Plugin Version</th><td>' . esc_html((string) ($trace['plugin_version'] ?? '')) . '</td></tr>';
         echo '<tr><th>Schema Version</th><td>' . esc_html((string) ((int) get_option('dcb_schema_version', 0))) . '</td></tr>';
+        echo '<tr><th>Safe Mode</th><td>' . esc_html(self::safe_mode_enabled() ? 'enabled' : 'disabled') . '</td></tr>';
         echo '<tr><th>Last Boot Status</th><td>' . esc_html((string) ($trace['status'] ?? 'unknown')) . '</td></tr>';
         echo '<tr><th>Dependencies Loaded</th><td>' . esc_html(!empty($trace['dependencies_loaded']) ? 'yes' : 'no') . '</td></tr>';
         echo '<tr><th>Last Boot Started</th><td>' . esc_html((string) ($trace['started_at'] ?? '')) . '</td></tr>';
@@ -277,6 +324,10 @@ final class DCB_Loader {
             echo '<h2 style="margin-top:16px;">Failure Trace (summary)</h2>';
             echo '<pre style="max-width:1200px;white-space:pre-wrap;">' . esc_html((string) $failure['trace']) . '</pre>';
         }
+
+        if (self::safe_mode_enabled() && function_exists('current_user_can') && current_user_can('activate_plugins')) {
+            echo '<p style="margin-top:12px;"><a class="button button-primary" href="' . esc_url(self::safe_mode_disable_url()) . '">Disable Safe Mode and Retry Boot</a></p>';
+        }
     }
 
     public static function render_boot_error_notice(): void {
@@ -289,6 +340,7 @@ final class DCB_Loader {
             return;
         }
 
-        echo '<div class="notice notice-error"><p><strong>Document Center Builder boot failure:</strong> ' . esc_html($message) . ' — <a href="' . esc_url(admin_url('admin.php?page=dcb-dashboard')) . '">Open recovery dashboard</a></p></div>';
+        $prefix = self::safe_mode_enabled() ? 'Document Center Builder is in Safe Mode' : 'Document Center Builder boot failure';
+        echo '<div class="notice notice-error"><p><strong>' . esc_html($prefix) . ':</strong> ' . esc_html($message) . ' — <a href="' . esc_url(admin_url('tools.php?page=dcb-recovery-dashboard')) . '">Open recovery dashboard</a></p></div>';
     }
 }

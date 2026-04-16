@@ -36,6 +36,58 @@ require_once DCB_PLUGIN_DIR . 'includes/helpers-ocr.php';
 require_once DCB_PLUGIN_DIR . 'includes/helpers-render.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-loader.php';
 
+if (!function_exists('dcb_register_fatal_shutdown_guard')) {
+    function dcb_register_fatal_shutdown_guard(): void {
+        register_shutdown_function(static function (): void {
+            $error = error_get_last();
+            if (!is_array($error)) {
+                return;
+            }
+
+            $type = (int) ($error['type'] ?? 0);
+            $fatal_types = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR);
+            if (!in_array($type, $fatal_types, true)) {
+                return;
+            }
+
+            $file = str_replace('\\', '/', (string) ($error['file'] ?? ''));
+            if ($file === '' || strpos($file, '/document-center-builder/') === false) {
+                return;
+            }
+
+            $line = (int) ($error['line'] ?? 0);
+            $message = sanitize_text_field((string) ($error['message'] ?? 'Fatal plugin error'));
+            $summary = sprintf('fatal_shutdown: %s (%s:%d)', $message, $file, $line);
+
+            if (function_exists('update_option')) {
+                update_option('dcb_safe_mode', '1', false);
+                update_option('dcb_boot_error', $summary, false);
+                update_option('dcb_boot_trace', array(
+                    'status' => 'failed',
+                    'plugin_version' => defined('DCB_VERSION') ? (string) DCB_VERSION : '',
+                    'schema_version' => (int) get_option('dcb_schema_version', 0),
+                    'started_at' => function_exists('current_time') ? (string) current_time('mysql') : gmdate('Y-m-d H:i:s'),
+                    'completed_at' => function_exists('current_time') ? (string) current_time('mysql') : gmdate('Y-m-d H:i:s'),
+                    'dependencies_loaded' => true,
+                    'failed_step' => 'runtime.shutdown',
+                    'failure' => array(
+                        'step' => 'runtime.shutdown',
+                        'message' => $message,
+                        'file' => $file,
+                        'line' => $line,
+                        'trace' => '',
+                    ),
+                    'steps' => array(),
+                ), false);
+            }
+
+            if (function_exists('error_log')) {
+                error_log('[DCB_FATAL_SHUTDOWN] ' . $summary);
+            }
+        });
+    }
+}
+
 if (!function_exists('dcb_menu_slug_exists')) {
     function dcb_menu_slug_exists(string $slug): bool {
         global $menu, $submenu;
@@ -166,6 +218,8 @@ add_action('admin_menu', 'dcb_register_tools_fallback_menu', 999);
 add_filter('plugin_action_links_' . DCB_PLUGIN_BASENAME, 'dcb_plugin_action_links');
 add_filter('plugin_action_links', 'dcb_plugin_action_links_global', 10, 2);
 add_action('admin_notices', 'dcb_plugins_screen_quick_notice');
+
+dcb_register_fatal_shutdown_guard();
 
 register_activation_hook(__FILE__, array('DCB_Loader', 'activate'));
 
