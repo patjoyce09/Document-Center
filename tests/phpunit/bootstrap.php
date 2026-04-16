@@ -266,6 +266,40 @@ if (!function_exists('wp_kses_post')) {
 if (!function_exists('nocache_headers')) {
     function nocache_headers() {}
 }
+if (!function_exists('wp_next_scheduled')) {
+    function wp_next_scheduled($hook, $args = array()) {
+        $events = isset($GLOBALS['dcb_scheduled_events']) && is_array($GLOBALS['dcb_scheduled_events']) ? $GLOBALS['dcb_scheduled_events'] : array();
+        return isset($events[(string) $hook]) ? (int) $events[(string) $hook]['timestamp'] : false;
+    }
+}
+if (!function_exists('wp_schedule_event')) {
+    function wp_schedule_event($timestamp, $recurrence, $hook, $args = array()) {
+        if (!isset($GLOBALS['dcb_scheduled_events']) || !is_array($GLOBALS['dcb_scheduled_events'])) {
+            $GLOBALS['dcb_scheduled_events'] = array();
+        }
+        $GLOBALS['dcb_scheduled_events'][(string) $hook] = array(
+            'timestamp' => (int) $timestamp,
+            'recurrence' => (string) $recurrence,
+            'args' => (array) $args,
+        );
+        return true;
+    }
+}
+if (!function_exists('wp_mail')) {
+    function wp_mail($to, $subject, $message, $headers = '', $attachments = array()) {
+        if (!isset($GLOBALS['dcb_sent_mails']) || !is_array($GLOBALS['dcb_sent_mails'])) {
+            $GLOBALS['dcb_sent_mails'] = array();
+        }
+        $GLOBALS['dcb_sent_mails'][] = array(
+            'to' => (string) $to,
+            'subject' => (string) $subject,
+            'message' => (string) $message,
+            'headers' => $headers,
+            'attachments' => $attachments,
+        );
+        return true;
+    }
+}
 if (!function_exists('get_option')) {
     function get_option($key, $default = false) { return array_key_exists($key, $GLOBALS['dcb_options']) ? $GLOBALS['dcb_options'][$key] : $default; }
 }

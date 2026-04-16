@@ -113,11 +113,25 @@ final class DCB_CLI {
 
         $summary_only = array_key_exists('summary-only', $assoc_args);
         if ($summary_only) {
+            $summary = isset($report['summary']) && is_array($report['summary']) ? $report['summary'] : array();
             $summary_payload = array(
+                'schema' => array(
+                    'name' => 'dcb.forms-parity.summary',
+                    'version' => '1.0.0',
+                ),
+                'generated_at' => current_time('mysql'),
                 'ok' => true,
+                'command' => 'dcb forms-parity-report --summary-only',
                 'source_mode' => $source,
                 'target_mode' => $target,
-                'summary' => isset($report['summary']) && is_array($report['summary']) ? $report['summary'] : array(),
+                'summary' => array(
+                    'exact_match' => !empty($summary['exact_match']),
+                    'severity' => sanitize_key((string) ($summary['severity'] ?? 'info')),
+                    'verified_ratio' => (int) ($summary['verified_ratio'] ?? 0),
+                    'missing_count' => (int) ($summary['missing_count'] ?? 0),
+                    'extra_count' => (int) ($summary['extra_count'] ?? 0),
+                    'checksum_mismatch_count' => (int) ($summary['checksum_mismatch_count'] ?? 0),
+                ),
                 'counts' => array(
                     'source_count' => (int) ($report['source_count'] ?? 0),
                     'target_count' => (int) ($report['target_count'] ?? 0),

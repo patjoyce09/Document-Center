@@ -51,9 +51,13 @@ final class DCB_Settings {
             'dcb_forms_storage_last_migrated_target' => '',
             'dcb_workflow_action_replay_tokens' => array(),
             'dcb_workflow_action_audit_log' => array(),
+            'dcb_workflow_action_audit_seq' => 0,
             'dcb_forms_storage_drift_last' => array(),
             'dcb_forms_storage_drift_log' => array(),
             'dcb_forms_parity_monitor_enabled' => '1',
+            'dcb_forms_parity_alert_enabled' => '0',
+            'dcb_forms_parity_alert_email' => '',
+            'dcb_forms_parity_alert_last' => array(),
         );
     }
 

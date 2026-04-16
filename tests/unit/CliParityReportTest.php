@@ -82,4 +82,35 @@ final class CliParityReportTest extends TestCase {
         $this->assertStringContainsString('form_key,issue,detail,verified_ratio', $csv);
         $this->assertStringContainsString('checksum_mismatch', $csv);
     }
+
+    public function testSummaryOnlySchemaShapeIsStable(): void {
+        \DCB_CLI::forms_parity_report(array(), array(
+            'source' => 'option',
+            'target' => 'cpt',
+            'summary-only' => true,
+        ));
+
+        $this->assertNotEmpty(\WP_CLI::$logs);
+        $json = (string) end(\WP_CLI::$logs);
+        $decoded = json_decode($json, true);
+        $this->assertIsArray($decoded);
+
+        $this->assertArrayHasKey('schema', $decoded);
+        $this->assertSame('dcb.forms-parity.summary', (string) (($decoded['schema']['name'] ?? '')));
+        $this->assertSame('1.0.0', (string) (($decoded['schema']['version'] ?? '')));
+        $this->assertArrayHasKey('generated_at', $decoded);
+        $this->assertArrayHasKey('command', $decoded);
+        $this->assertArrayHasKey('source_mode', $decoded);
+        $this->assertArrayHasKey('target_mode', $decoded);
+        $this->assertArrayHasKey('summary', $decoded);
+        $this->assertArrayHasKey('counts', $decoded);
+
+        $summary = (array) ($decoded['summary'] ?? array());
+        $this->assertArrayHasKey('exact_match', $summary);
+        $this->assertArrayHasKey('severity', $summary);
+        $this->assertArrayHasKey('verified_ratio', $summary);
+        $this->assertArrayHasKey('missing_count', $summary);
+        $this->assertArrayHasKey('extra_count', $summary);
+        $this->assertArrayHasKey('checksum_mismatch_count', $summary);
+    }
 }
