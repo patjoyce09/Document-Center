@@ -153,7 +153,7 @@ if (!function_exists('dcb_plugin_action_links')) {
             return $links;
         }
 
-        $open_link = '<a href="' . esc_url(admin_url('admin.php?page=dcb-dashboard')) . '">Open Document Center</a>';
+        $open_link = '<a href="' . esc_url(admin_url('admin.php?page=dcb-recovery-dashboard')) . '">Open Document Center</a>';
         array_unshift($links, $open_link);
         return $links;
     }
@@ -170,7 +170,7 @@ if (!function_exists('dcb_plugin_action_links_global')) {
         }
 
         if (!isset($actions['dcb_open'])) {
-            $actions['dcb_open'] = '<a href="' . esc_url(admin_url('tools.php?page=dcb-recovery-dashboard')) . '">Open Document Center</a>';
+            $actions['dcb_open'] = '<a href="' . esc_url(admin_url('admin.php?page=dcb-recovery-dashboard')) . '">Open Document Center</a>';
         }
 
         return $actions;
@@ -208,13 +208,38 @@ if (!function_exists('dcb_plugins_screen_quick_notice')) {
             return;
         }
 
-        $url = admin_url('tools.php?page=dcb-recovery-dashboard');
+        $url = admin_url('admin.php?page=dcb-recovery-dashboard');
         echo '<div class="notice notice-info"><p><strong>Document Center:</strong> <a href="' . esc_url($url) . '">Open Dashboard</a></p></div>';
+    }
+}
+
+if (!function_exists('dcb_admin_init_recovery_dispatch')) {
+    function dcb_admin_init_recovery_dispatch(): void {
+        if (!function_exists('is_admin') || !is_admin()) {
+            return;
+        }
+
+        $page = isset($_GET['page']) ? sanitize_key((string) $_GET['page']) : '';
+        if ($page !== 'dcb-recovery-dashboard') {
+            return;
+        }
+
+        if (!current_user_can('read')) {
+            wp_die('Unauthorized');
+        }
+
+        if (!function_exists('get_current_screen') || !get_current_screen()) {
+            require_once ABSPATH . 'wp-admin/admin-header.php';
+            dcb_render_recovery_dashboard();
+            require_once ABSPATH . 'wp-admin/admin-footer.php';
+            exit;
+        }
     }
 }
 
 add_action('admin_menu', 'dcb_register_recovery_menu', 999);
 add_action('admin_menu', 'dcb_register_tools_fallback_menu', 999);
+add_action('admin_init', 'dcb_admin_init_recovery_dispatch', 1);
 add_filter('plugin_action_links_' . DCB_PLUGIN_BASENAME, 'dcb_plugin_action_links');
 add_filter('plugin_action_links', 'dcb_plugin_action_links_global', 10, 2);
 add_action('admin_notices', 'dcb_plugins_screen_quick_notice');

@@ -263,7 +263,7 @@ final class DCB_Loader {
     }
 
     public static function safe_mode_disable_url(): string {
-        $base = admin_url('tools.php?page=dcb-recovery-dashboard&dcb_safe_mode=off');
+        $base = admin_url('admin.php?page=dcb-recovery-dashboard&dcb_safe_mode=off');
         if (!function_exists('wp_create_nonce')) {
             return $base;
         }
@@ -341,6 +341,6 @@ final class DCB_Loader {
         }
 
         $prefix = self::safe_mode_enabled() ? 'Document Center Builder is in Safe Mode' : 'Document Center Builder boot failure';
-        echo '<div class="notice notice-error"><p><strong>' . esc_html($prefix) . ':</strong> ' . esc_html($message) . ' — <a href="' . esc_url(admin_url('tools.php?page=dcb-recovery-dashboard')) . '">Open recovery dashboard</a></p></div>';
+        echo '<div class="notice notice-error"><p><strong>' . esc_html($prefix) . ':</strong> ' . esc_html($message) . ' — <a href="' . esc_url(admin_url('admin.php?page=dcb-recovery-dashboard')) . '">Open recovery dashboard</a></p></div>';
     }
 }
