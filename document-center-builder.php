@@ -60,18 +60,21 @@ if (!function_exists('dcb_menu_slug_exists')) {
 
 if (!function_exists('dcb_render_recovery_dashboard')) {
     function dcb_render_recovery_dashboard(): void {
-        echo '<div class="wrap">';
-        echo '<h1>Document Center Builder</h1>';
-
         if (class_exists('DCB_Admin') && method_exists('DCB_Admin', 'render_dashboard')) {
             DCB_Admin::render_dashboard();
+        } else {
+            echo '<div class="wrap">';
+            echo '<h1>Document Center Builder</h1>';
+            echo '<div class="notice notice-warning"><p>Document Center loaded in recovery mode. Core admin handlers were not available at menu render time.</p></div>';
+            echo '<p><a class="button button-primary" href="' . esc_url(admin_url('plugins.php')) . '">Back to Plugins</a></p>';
             echo '</div>';
-            return;
         }
 
-        echo '<div class="notice notice-warning"><p>Document Center loaded in recovery mode. Core admin handlers were not available at menu render time.</p></div>';
-        echo '<p><a class="button button-primary" href="' . esc_url(admin_url('plugins.php')) . '">Back to Plugins</a></p>';
-        echo '</div>';
+        if (class_exists('DCB_Loader') && method_exists('DCB_Loader', 'render_boot_trace_panel')) {
+            echo '<div class="wrap">';
+            DCB_Loader::render_boot_trace_panel();
+            echo '</div>';
+        }
     }
 }
 
