@@ -6,7 +6,7 @@
  * Version: 0.3.0
  * Requires at least: 6.4
  * Requires PHP: 8.0
- * Author: Joyce Sytstems
+ * Author: Joyce Systems
  * Text Domain: document-center-builder
  * Domain Path: /languages
  */
