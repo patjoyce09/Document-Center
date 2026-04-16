@@ -44,6 +44,7 @@ final class DCB_Loader {
 
     public function boot(): void {
         add_action('plugins_loaded', array($this, 'load_textdomain'));
+        DCB_Permissions::init();
         DCB_Settings::init();
         DCB_Form_Repository::init();
         DCB_Admin::init();
