@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.0
+Stable tag: 0.2.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,9 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.1 =
+* Fixed builder blank-page behavior by guarding form/diagnostics runtime calls and rendering fallback warnings.
+
 = 0.2.0 =
 * Added migration/version runner.
 * Added workflow engine scaffold with status transitions, assignees, timeline, and queue metadata.

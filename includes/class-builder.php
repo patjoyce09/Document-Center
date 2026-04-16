@@ -14,16 +14,36 @@ final class DCB_Builder {
             wp_die('Unauthorized');
         }
 
-        $custom_forms = dcb_get_custom_forms();
+        $builder_warnings = array();
+        $custom_forms = array();
+        try {
+            $custom_forms = dcb_get_custom_forms();
+        } catch (\Throwable $e) {
+            $builder_warnings[] = 'Could not load existing forms; showing empty builder state.';
+            if (function_exists('error_log')) {
+                error_log('[DCB_BUILDER_LOAD_FAILED] ' . sanitize_text_field($e->getMessage()));
+            }
+        }
         $forms_json = wp_json_encode($custom_forms, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if (!is_string($forms_json) || $forms_json === '') {
             $forms_json = '{}';
         }
 
-        $diag = dcb_ocr_collect_environment_diagnostics();
+        $diag = array('status' => 'unknown');
+        try {
+            $diag = dcb_ocr_collect_environment_diagnostics();
+        } catch (\Throwable $e) {
+            $builder_warnings[] = 'OCR diagnostics unavailable right now.';
+            if (function_exists('error_log')) {
+                error_log('[DCB_BUILDER_DIAG_FAILED] ' . sanitize_text_field($e->getMessage()));
+            }
+        }
 
         echo '<div class="wrap">';
         echo '<h1>Forms Builder</h1>';
+        if (!empty($builder_warnings)) {
+            echo '<div class="notice notice-warning"><p>' . esc_html(implode(' ', $builder_warnings)) . '</p></div>';
+        }
         if (isset($_GET['updated'])) {
             echo '<div class="notice notice-success"><p>Builder settings saved.</p></div>';
         }
