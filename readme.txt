@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.2
+Stable tag: 0.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -39,6 +39,11 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.3 =
+* Added resilient per-module boot guards in loader to prevent dashboard-wide lockouts.
+* Added emergency Document Center menu fallback when normal menu registration is interrupted.
+* Added admin boot warning notice and structured module failure table for fast diagnosis.
+
 = 0.3.2 =
 * Rolled back bootstrap/loader hotfix complexity to a stable module boot sequence.
 * Preserved current workflow/parity/CLI feature set while restoring reliable boot behavior.
