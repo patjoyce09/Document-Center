@@ -53,9 +53,7 @@ final class DCB_Assets {
         }
 
         $content = (string) $post->post_content;
-        $has_primary = strpos($content, '[dcb_digital_forms_portal]') !== false;
-        $has_legacy = strpos($content, '[document_digital_forms_portal]') !== false;
-        if (!$has_primary && !$has_legacy) {
+        if (!self::content_has_any_shortcode($content, array('dcb_digital_forms_portal', 'document_digital_forms_portal'))) {
             return;
         }
 
@@ -94,9 +92,7 @@ final class DCB_Assets {
         }
 
         $content = (string) $post->post_content;
-        $has_primary = strpos($content, '[dcb_upload_portal]') !== false;
-        $has_legacy = strpos($content, '[document_upload_portal]') !== false;
-        if (!$has_primary && !$has_legacy) {
+        if (!self::content_has_any_shortcode($content, array('dcb_upload_portal', 'document_upload_portal'))) {
             return;
         }
 
@@ -109,5 +105,28 @@ final class DCB_Assets {
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('dcb_upload_files_nonce'),
         ));
+    }
+
+    private static function content_has_any_shortcode(string $content, array $tags): bool {
+        if ($content === '' || empty($tags)) {
+            return false;
+        }
+
+        foreach ($tags as $tag) {
+            $shortcode = sanitize_key((string) $tag);
+            if ($shortcode === '') {
+                continue;
+            }
+
+            if (function_exists('has_shortcode') && has_shortcode($content, $shortcode)) {
+                return true;
+            }
+
+            if (strpos($content, '[' . $shortcode) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
