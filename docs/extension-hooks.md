@@ -30,3 +30,12 @@ Fires after submission is finalized/notification phase.
 1. `$submission_id` (`int`)
 2. `$form_key` (`string`)
 3. `$user_id` (`int`)
+
+## Key settings
+- `dcb_ocr_mode`
+- `dcb_ocr_api_base_url`
+- `dcb_ocr_api_key`
+- `dcb_ocr_api_auth_header`
+- `dcb_ocr_timeout_seconds`
+- `dcb_ocr_max_file_size_mb`
+- `dcb_forms_storage_mode`

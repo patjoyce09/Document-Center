@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.0
+Stable tag: 0.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -19,8 +19,12 @@ Document Center Builder provides:
 - Remote OCR API mode over HTTPS with API key auth (no SSH)
 - Ordered document nodes + template blocks + output template metadata
 - Workflow statuses, assignees, queues, and activity timeline
+- Reviewer queue screen and bulk workflow transitions
 - Submission storage + signature evidence + finalization metadata
+- Signature subsystem for typed/drawn flows and evidence packaging
 - OCR diagnostics, capability checks, and OCR review queue
+- Remote OCR contract strengthened with health/capabilities/extract expectations
+- Granular plugin capability model (no blanket admin-only checks)
 - Generic upload portal + routing rules
 - Optional Tutor LMS integration layer (isolated module)
 
@@ -35,6 +39,19 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.0 =
+* Added plugin capability model: `dcb_manage_forms`, `dcb_review_submissions`, `dcb_manage_workflows`, `dcb_manage_settings`, `dcb_run_ocr_tools`.
+* Added reviewer queue admin screen with status filtering and workflow-focused UX.
+* Added assignee selection by real users and role queue in workflow meta box.
+* Added correction request UX and improved timeline presentation.
+* Added bulk actions for common review state transitions.
+* Implemented reusable signature subsystem (`DCB_Signatures`).
+* Added explicit finalize action endpoint and row action.
+* Formalized remote OCR API contract (`dcb-ocr-v1`) and added health/capabilities probing.
+* Added OCR auth header setting and richer diagnostics details.
+* Added repository abstraction (`DCB_Form_Repository`) and storage migration roadmap docs.
+* Added PHPUnit test scaffolding and stronger CI workflow.
+
 = 0.2.0 =
 * Added migration/version runner.
 * Added workflow engine scaffold with status transitions, assignees, timeline, and queue metadata.

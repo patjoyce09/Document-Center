@@ -24,9 +24,11 @@ $option_keys = array(
     'dcb_ocr_mode',
     'dcb_ocr_api_base_url',
     'dcb_ocr_api_key',
+    'dcb_ocr_api_auth_header',
     'dcb_ocr_timeout_seconds',
     'dcb_ocr_max_file_size_mb',
     'dcb_ocr_confidence_threshold',
+    'dcb_forms_storage_mode',
     'dcb_tutor_integration_enabled',
     'dcb_tutor_mapping',
 );

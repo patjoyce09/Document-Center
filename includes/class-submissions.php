@@ -27,8 +27,23 @@ final class DCB_Submissions {
             'show_in_menu' => false,
             'supports' => array('title'),
             'menu_icon' => 'dashicons-feedback',
-            'capability_type' => 'post',
+            'capability_type' => array('dcb_form_submission', 'dcb_form_submissions'),
             'map_meta_cap' => true,
+            'capabilities' => array(
+                'edit_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+                'read_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+                'delete_post' => DCB_Permissions::CAP_MANAGE_WORKFLOWS,
+                'edit_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+                'edit_others_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+                'publish_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+                'read_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+                'delete_posts' => DCB_Permissions::CAP_MANAGE_WORKFLOWS,
+                'delete_private_posts' => DCB_Permissions::CAP_MANAGE_WORKFLOWS,
+                'delete_published_posts' => DCB_Permissions::CAP_MANAGE_WORKFLOWS,
+                'delete_others_posts' => DCB_Permissions::CAP_MANAGE_WORKFLOWS,
+                'edit_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+                'edit_published_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            ),
         ));
 
         register_post_type('dcb_upload_log', array(
@@ -40,6 +55,14 @@ final class DCB_Submissions {
             'show_ui' => true,
             'show_in_menu' => false,
             'supports' => array('title'),
+            'capability_type' => array('dcb_upload_log', 'dcb_upload_logs'),
+            'map_meta_cap' => true,
+            'capabilities' => array(
+                'edit_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+                'read_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+                'delete_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+                'edit_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            ),
         ));
 
         register_post_type('dcb_ocr_review_queue', array(
@@ -51,6 +74,14 @@ final class DCB_Submissions {
             'show_ui' => true,
             'show_in_menu' => false,
             'supports' => array('title'),
+            'capability_type' => array('dcb_ocr_review', 'dcb_ocr_reviews'),
+            'map_meta_cap' => true,
+            'capabilities' => array(
+                'edit_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+                'read_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+                'delete_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+                'edit_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            ),
         ));
     }
 
@@ -119,10 +150,7 @@ final class DCB_Submissions {
         }
 
         $policy_versions = dcb_get_policy_versions();
-        $signature_mode = sanitize_key((string) ($_POST['signature_mode'] ?? 'typed'));
-        if (!in_array($signature_mode, array('typed', 'drawn'), true)) {
-            $signature_mode = 'typed';
-        }
+        $signature_mode = DCB_Signatures::normalize_mode((string) ($_POST['signature_mode'] ?? 'typed'));
         $signature_drawn_data = isset($_POST['signature_drawn_data']) ? trim((string) wp_unslash($_POST['signature_drawn_data'])) : '';
         $signer_identity = sanitize_text_field((string) ($_POST['signer_identity'] ?? ''));
         $signature_timestamp_client = sanitize_text_field((string) ($_POST['signature_timestamp'] ?? ''));
@@ -143,10 +171,6 @@ final class DCB_Submissions {
             wp_send_json_error(array('message' => 'Please fix validation errors before submitting.', 'errors' => array_values(array_unique((array) ($validation['errors'] ?? array())))), 422);
         }
 
-        if ($signature_mode === 'drawn' && !dcb_signature_data_is_valid($signature_drawn_data)) {
-            wp_send_json_error(array('message' => 'Please fix validation errors before submitting.', 'errors' => array('Drawn signature is missing or invalid. Please sign again before submitting.')), 422);
-        }
-
         if ($signer_identity === '') {
             $signer_identity = $user_name;
         }
@@ -155,6 +179,16 @@ final class DCB_Submissions {
         $form = (array) ($validation['form'] ?? array());
         $form_label = (string) ($form['label'] ?? $form_key);
         $form_version = max(1, (int) ($form['version'] ?? 1));
+
+        $signature_validation = DCB_Signatures::validate_payload(array(
+            'mode' => $signature_mode,
+            'drawn_data' => $signature_drawn_data,
+            'typed_signature' => (string) ($clean['signature_name'] ?? ''),
+            'signer_identity' => $signer_identity,
+        ));
+        if (empty($signature_validation['ok'])) {
+            wp_send_json_error(array('message' => 'Please fix validation errors before submitting.', 'errors' => array_values((array) ($signature_validation['errors'] ?? array()))), 422);
+        }
 
         $submission_id = wp_insert_post(array(
             'post_type' => 'dcb_form_submission',
@@ -184,13 +218,20 @@ final class DCB_Submissions {
             DCB_Workflow::add_timeline((int) $submission_id, 'submitted', array('form_key' => $form_key));
         }
 
-        $ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field((string) wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
-        $ua = isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field((string) wp_unslash($_SERVER['HTTP_USER_AGENT'])) : '';
-        $payload_hash = hash_hmac('sha256', wp_json_encode($clean), wp_salt('auth'));
         $signature_timestamp_server = current_time('mysql');
-        $drawn_signature_hash = '';
+        $evidence_package = DCB_Signatures::build_evidence_package(array(
+            'signature_mode' => $signature_mode,
+            'signature_drawn_data' => $signature_drawn_data,
+            'signer_identity' => $signer_identity,
+            'signature_timestamp_client' => $signature_timestamp_client,
+            'signature_timestamp_server' => $signature_timestamp_server,
+            'consent_text_version' => $consent_text_version !== '' ? $consent_text_version : $policy_versions['consent_text_version'],
+            'attestation_text_version' => $attestation_text_version !== '' ? $attestation_text_version : $policy_versions['attestation_text_version'],
+            'clean' => $clean,
+        ));
+        $payload_hash = (string) ($evidence_package['payload_hash'] ?? '');
+        $drawn_signature_hash = (string) ($evidence_package['drawn_signature_hash'] ?? '');
         if ($signature_mode === 'drawn' && $signature_drawn_data !== '') {
-            $drawn_signature_hash = hash('sha256', $signature_drawn_data);
             update_post_meta((int) $submission_id, '_dcb_form_signature_drawn_data', $signature_drawn_data);
             update_post_meta((int) $submission_id, '_dcb_form_signature_drawn_sha256', $drawn_signature_hash);
         }
@@ -198,25 +239,8 @@ final class DCB_Submissions {
         update_post_meta((int) $submission_id, '_dcb_form_signature_mode', $signature_mode);
         update_post_meta((int) $submission_id, '_dcb_form_signer_identity', $signer_identity);
         update_post_meta((int) $submission_id, '_dcb_form_signature_timestamp', $signature_timestamp_server);
-        $esign_evidence = array(
-            'consent' => (string) ($clean['esign_consent'] ?? ''),
-            'attestation' => (string) ($clean['attest_truth'] ?? ''),
-            'signature' => (string) ($clean['signature_name'] ?? ''),
-            'signatureDate' => (string) ($clean['signature_date'] ?? ''),
-            'signatureMode' => $signature_mode,
-            'signerIdentity' => $signer_identity,
-            'signatureTimestampClient' => $signature_timestamp_client,
-            'signatureTimestamp' => $signature_timestamp_server,
-            'drawnSignatureHash' => $drawn_signature_hash,
-            'consentTextVersion' => $consent_text_version !== '' ? $consent_text_version : $policy_versions['consent_text_version'],
-            'attestationTextVersion' => $attestation_text_version !== '' ? $attestation_text_version : $policy_versions['attestation_text_version'],
-            'ip' => $ip,
-            'userAgent' => mb_substr($ua, 0, 255),
-            'timestamp' => $signature_timestamp_server,
-            'hash' => $payload_hash,
-        );
         update_post_meta((int) $submission_id, '_dcb_form_payload_hash', $payload_hash);
-        update_post_meta((int) $submission_id, '_dcb_form_esign_evidence', wp_json_encode($esign_evidence));
+        update_post_meta((int) $submission_id, '_dcb_form_esign_evidence', wp_json_encode((array) ($evidence_package['evidence'] ?? array())));
 
         dcb_finalize_submission_output((int) $submission_id, $user_id);
         if (class_exists('DCB_Workflow')) {
@@ -235,7 +259,7 @@ final class DCB_Submissions {
     }
 
     public static function render_submission_meta_box(WP_Post $post): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_REVIEW_SUBMISSIONS)) {
             echo '<p>Unauthorized.</p>';
             return;
         }
@@ -308,7 +332,7 @@ final class DCB_Submissions {
     }
 
     public static function submission_row_actions(array $actions, WP_Post $post): array {
-        if ($post->post_type !== 'dcb_form_submission' || !current_user_can('manage_options')) {
+        if ($post->post_type !== 'dcb_form_submission' || !DCB_Permissions::can(DCB_Permissions::CAP_REVIEW_SUBMISSIONS)) {
             return $actions;
         }
 
@@ -316,6 +340,9 @@ final class DCB_Submissions {
         $actions['dcb_print'] = '<a href="' . esc_url(DCB_Renderer::submission_print_url($submission_id)) . '">Print</a>';
         $actions['dcb_export'] = '<a href="' . esc_url(DCB_Renderer::submission_export_url($submission_id)) . '">Export JSON</a>';
         $actions['dcb_export_pdf'] = '<a href="' . esc_url(DCB_Renderer::submission_export_pdf_url($submission_id)) . '">Export PDF</a>';
+        if (DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_WORKFLOWS)) {
+            $actions['dcb_finalize'] = '<a href="' . esc_url(DCB_Renderer::submission_finalize_url($submission_id)) . '">Finalize</a>';
+        }
 
         return $actions;
     }

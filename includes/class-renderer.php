@@ -9,10 +9,11 @@ final class DCB_Renderer {
         add_action('admin_post_dcb_print_submission', array(__CLASS__, 'print_submission_action'));
         add_action('admin_post_dcb_export_submission', array(__CLASS__, 'export_submission_action'));
         add_action('admin_post_dcb_export_submission_pdf', array(__CLASS__, 'export_submission_pdf_action'));
+        add_action('admin_post_dcb_finalize_submission', array(__CLASS__, 'finalize_submission_action'));
     }
 
     private static function guard(string $action, int $submission_id): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_REVIEW_SUBMISSIONS)) {
             wp_die('Unauthorized');
         }
         check_admin_referer($action . '_' . $submission_id);
@@ -32,6 +33,10 @@ final class DCB_Renderer {
 
     public static function submission_export_pdf_url(int $submission_id): string {
         return wp_nonce_url(admin_url('admin-post.php?action=dcb_export_submission_pdf&submission_id=' . $submission_id), 'dcb_export_submission_pdf_' . $submission_id);
+    }
+
+    public static function submission_finalize_url(int $submission_id): string {
+        return wp_nonce_url(admin_url('admin-post.php?action=dcb_finalize_submission&submission_id=' . $submission_id), 'dcb_finalize_submission_' . $submission_id);
     }
 
     public static function print_submission_action(): void {
@@ -98,6 +103,28 @@ final class DCB_Renderer {
         header('Content-Type: ' . sanitize_text_field((string) ($adapter_result['mime'] ?? 'application/pdf')));
         header('Content-Disposition: attachment; filename="' . sanitize_file_name((string) ($adapter_result['filename'] ?? ('dcb-submission-' . $submission_id . '.pdf'))) . '"');
         echo $adapter_result['binary']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        exit;
+    }
+
+    public static function finalize_submission_action(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_WORKFLOWS)) {
+            wp_die('Unauthorized');
+        }
+
+        $submission_id = isset($_GET['submission_id']) ? (int) $_GET['submission_id'] : 0;
+        check_admin_referer('dcb_finalize_submission_' . $submission_id);
+
+        $post = get_post($submission_id);
+        if (!$post instanceof WP_Post || $post->post_type !== 'dcb_form_submission') {
+            wp_die('Invalid submission.');
+        }
+
+        dcb_finalize_submission_output($submission_id, get_current_user_id());
+        if (class_exists('DCB_Workflow')) {
+            DCB_Workflow::set_status($submission_id, 'finalized', 'Manual finalize action.');
+        }
+
+        wp_safe_redirect(admin_url('post.php?post=' . $submission_id . '&action=edit'));
         exit;
     }
 }

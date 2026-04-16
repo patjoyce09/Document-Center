@@ -13,9 +13,16 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
+          coverage: none
+      - name: Validate composer files
+        run: composer validate --strict || true
+      - name: Install test dependencies
+        run: composer install --no-interaction --prefer-dist
       - name: Lint PHP files
         run: |
           find . -type f -name "*.php" -not -path "*/vendor/*" -print0 | xargs -0 -n1 php -l
+      - name: Run PHPUnit tests
+        run: vendor/bin/phpunit --configuration phpunit.xml
       - name: Run smoke tests
         run: |
           php tests/schema_smoke.php

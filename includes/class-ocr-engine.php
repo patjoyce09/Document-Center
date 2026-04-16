@@ -42,6 +42,8 @@ final class DCB_OCR_Engine_Local implements DCB_OCR_Engine {
 }
 
 final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
+    private const CONTRACT_VERSION = 'dcb-ocr-v1';
+
     public function slug(): string {
         return 'remote';
     }
@@ -49,89 +51,174 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
     public function capabilities(): array {
         $base_url = trim((string) get_option('dcb_ocr_api_base_url', ''));
         $api_key = trim((string) get_option('dcb_ocr_api_key', ''));
+        $auth_header = $this->auth_header_name();
+        $timeout = max(5, min(120, (int) get_option('dcb_ocr_timeout_seconds', 30)));
         $is_https = strpos(strtolower($base_url), 'https://') === 0;
 
+        if ($base_url === '' || !$is_https || $api_key === '') {
+            return array(
+                'ready' => false,
+                'status' => $is_https ? 'missing_credentials' : 'invalid_base_url',
+                'warnings' => $is_https ? array('Remote OCR API key is required.') : array('Remote OCR base URL must use HTTPS.'),
+                'contract_version' => self::CONTRACT_VERSION,
+            );
+        }
+
+        $request_id = $this->new_request_id();
+        $health = $this->remote_call('health', 'GET', array(), $timeout, $request_id, $auth_header, $api_key);
+        $caps = $this->remote_call('capabilities', 'GET', array(), $timeout, $request_id, $auth_header, $api_key);
+
+        $warnings = array();
+        $ready = !empty($health['ok']) && !empty($caps['ok']);
+        if (empty($health['ok'])) {
+            $warnings[] = 'Health endpoint unavailable: ' . sanitize_text_field((string) ($health['message'] ?? 'unknown'));
+        }
+        if (empty($caps['ok'])) {
+            $warnings[] = 'Capabilities endpoint unavailable: ' . sanitize_text_field((string) ($caps['message'] ?? 'unknown'));
+        }
+
         return array(
-            'ready' => $base_url !== '' && $api_key !== '' && $is_https,
-            'status' => $is_https ? 'configured' : 'invalid_base_url',
-            'warnings' => $is_https ? array() : array('Remote OCR base URL must use HTTPS.'),
+            'ready' => $ready,
+            'status' => $ready ? 'ready' : 'degraded',
+            'warnings' => $warnings,
+            'contract_version' => self::CONTRACT_VERSION,
+            'auth_header' => $auth_header,
+            'health' => array(
+                'ok' => !empty($health['ok']),
+                'http_status' => (int) ($health['status_code'] ?? 0),
+                'body' => isset($health['body']) && is_array($health['body']) ? $health['body'] : array(),
+            ),
+            'capabilities' => array(
+                'ok' => !empty($caps['ok']),
+                'http_status' => (int) ($caps['status_code'] ?? 0),
+                'body' => isset($caps['body']) && is_array($caps['body']) ? $caps['body'] : array(),
+            ),
         );
     }
 
     public function extract(string $file_path, string $mime): array {
         $base_url = trim((string) get_option('dcb_ocr_api_base_url', ''));
         $api_key = trim((string) get_option('dcb_ocr_api_key', ''));
+        $auth_header = $this->auth_header_name();
         $timeout = max(5, min(120, (int) get_option('dcb_ocr_timeout_seconds', 30)));
         $max_mb = max(1, min(100, (int) get_option('dcb_ocr_max_file_size_mb', 15)));
+        $request_id = $this->new_request_id();
 
         if ($base_url === '' || strpos(strtolower($base_url), 'https://') !== 0) {
-            return array(
-                'text' => '',
-                'normalized' => '',
-                'engine' => 'remote',
-                'pages' => array(),
-                'warnings' => array(array('code' => 'remote_config_invalid', 'message' => 'Remote OCR base URL must be configured with HTTPS.')),
-                'failure_reason' => 'remote_config_invalid',
-                'provider' => 'remote',
-                'provenance' => array('mode' => 'remote', 'provider' => 'remote', 'timestamp' => current_time('mysql')),
-            );
+            return $this->error_result('remote_config_invalid', 'Remote OCR base URL must be configured with HTTPS.', $request_id);
         }
 
         if ($api_key === '') {
-            return array(
-                'text' => '',
-                'normalized' => '',
-                'engine' => 'remote',
-                'pages' => array(),
-                'warnings' => array(array('code' => 'remote_api_key_missing', 'message' => 'Remote OCR API key is missing.')),
-                'failure_reason' => 'remote_api_key_missing',
-                'provider' => 'remote',
-                'provenance' => array('mode' => 'remote', 'provider' => 'remote', 'timestamp' => current_time('mysql')),
-            );
+            return $this->error_result('remote_api_key_missing', 'Remote OCR API key is missing.', $request_id);
         }
 
         $file_size = @filesize($file_path);
         $max_bytes = $max_mb * 1024 * 1024;
         if (is_int($file_size) && $file_size > $max_bytes) {
-            return array(
-                'text' => '',
-                'normalized' => '',
-                'engine' => 'remote',
-                'pages' => array(),
-                'warnings' => array(array('code' => 'max_file_size_exceeded', 'message' => 'File exceeds configured OCR max file size.')),
-                'failure_reason' => 'max_file_size_exceeded',
-                'provider' => 'remote',
-                'provenance' => array('mode' => 'remote', 'provider' => 'remote', 'timestamp' => current_time('mysql')),
+            return $this->error_result('max_file_size_exceeded', 'File exceeds configured OCR max file size.', $request_id);
+        }
+
+        $body = array(
+            'contract_version' => self::CONTRACT_VERSION,
+            'request_id' => $request_id,
+            'file' => array(
+                'name' => basename($file_path),
+                'mime' => $mime,
+                'content_base64' => base64_encode((string) file_get_contents($file_path)),
+            ),
+            'options' => array(
+                'include_pages' => true,
+                'include_warnings' => true,
+            ),
+        );
+
+        $extract = $this->remote_call('extract', 'POST', $body, $timeout, $request_id, $auth_header, $api_key);
+        if (empty($extract['ok'])) {
+            return $this->error_result(
+                sanitize_key((string) ($extract['error_code'] ?? 'remote_request_failed')),
+                sanitize_text_field((string) ($extract['message'] ?? 'Remote OCR request failed.')),
+                $request_id,
+                (int) ($extract['status_code'] ?? 0)
             );
         }
 
-        $endpoint = trailingslashit($base_url) . 'extract';
-        $body = array(
-            'file_name' => basename($file_path),
-            'mime' => $mime,
-            'content_base64' => base64_encode((string) file_get_contents($file_path)),
+        $decoded = isset($extract['body']) && is_array($extract['body']) ? $extract['body'] : array();
+        $result = isset($decoded['result']) && is_array($decoded['result']) ? $decoded['result'] : $decoded;
+        $text = trim((string) ($result['text'] ?? ''));
+        $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
+        $warnings = isset($result['warnings']) && is_array($result['warnings']) ? $result['warnings'] : array();
+        $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
+        if ($failure_reason === '' && $text === '') {
+            $failure_reason = 'empty_extraction';
+        }
+
+        $provider = isset($decoded['provider']) && is_array($decoded['provider']) ? $decoded['provider'] : array();
+        $provider_name = sanitize_text_field((string) ($provider['name'] ?? 'remote'));
+        $provider_version = sanitize_text_field((string) ($provider['version'] ?? ''));
+        $response_request_id = sanitize_text_field((string) ($decoded['request_id'] ?? $request_id));
+        $response_contract = sanitize_text_field((string) ($decoded['contract_version'] ?? self::CONTRACT_VERSION));
+
+        return array(
+            'text' => $text,
+            'normalized' => dcb_upload_normalize_text($text),
+            'engine' => sanitize_text_field((string) ($result['engine'] ?? 'remote-api')),
+            'pages' => $pages,
+            'warnings' => $warnings,
+            'failure_reason' => $failure_reason,
+            'provider' => 'remote',
+            'provenance' => array(
+                'mode' => 'remote',
+                'provider' => $provider_name !== '' ? $provider_name : 'remote',
+                'provider_version' => $provider_version,
+                'timestamp' => current_time('mysql'),
+                'request_id' => $response_request_id,
+                'request_url' => esc_url_raw((string) ($extract['url'] ?? '')),
+                'http_status' => (int) ($extract['status_code'] ?? 0),
+                'contract_version' => $response_contract,
+            ),
+        );
+    }
+
+    private function auth_header_name(): string {
+        $header = trim((string) get_option('dcb_ocr_api_auth_header', 'X-API-Key'));
+        return $header !== '' ? $header : 'X-API-Key';
+    }
+
+    private function new_request_id(): string {
+        if (function_exists('wp_generate_uuid4')) {
+            return (string) wp_generate_uuid4();
+        }
+        return uniqid('dcb_ocr_', true);
+    }
+
+    private function remote_call(string $path, string $method, array $payload, int $timeout, string $request_id, string $auth_header, string $api_key): array {
+        $base_url = trim((string) get_option('dcb_ocr_api_base_url', ''));
+        $url = trailingslashit($base_url) . ltrim($path, '/');
+        $headers = array(
+            'Accept' => 'application/json',
+            'X-DCB-Contract-Version' => self::CONTRACT_VERSION,
+            'X-DCB-Request-ID' => $request_id,
+        );
+        $headers[$auth_header] = $api_key;
+
+        $args = array(
+            'timeout' => $timeout,
+            'headers' => $headers,
+            'method' => strtoupper($method),
         );
 
-        $response = wp_remote_post($endpoint, array(
-            'timeout' => $timeout,
-            'headers' => array(
-                'Content-Type' => 'application/json',
-                'Accept' => 'application/json',
-                'X-API-Key' => $api_key,
-            ),
-            'body' => wp_json_encode($body),
-        ));
+        if (strtoupper($method) === 'POST') {
+            $args['headers']['Content-Type'] = 'application/json';
+            $args['body'] = wp_json_encode($payload);
+        }
 
+        $response = wp_remote_request($url, $args);
         if (is_wp_error($response)) {
             return array(
-                'text' => '',
-                'normalized' => '',
-                'engine' => 'remote',
-                'pages' => array(),
-                'warnings' => array(array('code' => 'remote_request_failed', 'message' => $response->get_error_message())),
-                'failure_reason' => 'remote_request_failed',
-                'provider' => 'remote',
-                'provenance' => array('mode' => 'remote', 'provider' => 'remote', 'timestamp' => current_time('mysql')),
+                'ok' => false,
+                'error_code' => 'remote_request_failed',
+                'message' => $response->get_error_message(),
+                'url' => $url,
             );
         }
 
@@ -142,37 +229,52 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
             $decoded = array();
         }
 
-        if ($status_code < 200 || $status_code >= 300) {
+        if ($status_code === 401 || $status_code === 403) {
             return array(
-                'text' => '',
-                'normalized' => '',
-                'engine' => 'remote',
-                'pages' => array(),
-                'warnings' => array(array('code' => 'remote_http_error', 'message' => 'Remote OCR HTTP error: ' . $status_code)),
-                'failure_reason' => 'remote_http_error',
-                'provider' => 'remote',
-                'provenance' => array('mode' => 'remote', 'provider' => 'remote', 'timestamp' => current_time('mysql')),
+                'ok' => false,
+                'error_code' => 'remote_auth_failed',
+                'message' => 'Remote OCR authentication failed.',
+                'status_code' => $status_code,
+                'body' => $decoded,
+                'url' => $url,
             );
         }
 
-        $text = trim((string) ($decoded['text'] ?? ''));
-        $pages = isset($decoded['pages']) && is_array($decoded['pages']) ? $decoded['pages'] : array();
-        $warnings = isset($decoded['warnings']) && is_array($decoded['warnings']) ? $decoded['warnings'] : array();
+        if ($status_code < 200 || $status_code >= 300) {
+            return array(
+                'ok' => false,
+                'error_code' => 'remote_http_error',
+                'message' => 'Remote OCR HTTP error: ' . $status_code,
+                'status_code' => $status_code,
+                'body' => $decoded,
+                'url' => $url,
+            );
+        }
 
         return array(
-            'text' => $text,
-            'normalized' => dcb_upload_normalize_text($text),
-            'engine' => sanitize_text_field((string) ($decoded['engine'] ?? 'remote-api')),
-            'pages' => $pages,
-            'warnings' => $warnings,
-            'failure_reason' => $text === '' ? 'empty_extraction' : '',
+            'ok' => true,
+            'status_code' => $status_code,
+            'body' => $decoded,
+            'url' => $url,
+        );
+    }
+
+    private function error_result(string $code, string $message, string $request_id, int $http_status = 0): array {
+        return array(
+            'text' => '',
+            'normalized' => '',
+            'engine' => 'remote',
+            'pages' => array(),
+            'warnings' => array(array('code' => sanitize_key($code), 'message' => sanitize_text_field($message))),
+            'failure_reason' => sanitize_key($code),
             'provider' => 'remote',
             'provenance' => array(
                 'mode' => 'remote',
                 'provider' => 'remote',
                 'timestamp' => current_time('mysql'),
-                'request_url' => esc_url_raw($endpoint),
-                'http_status' => $status_code,
+                'request_id' => $request_id,
+                'http_status' => $http_status,
+                'contract_version' => self::CONTRACT_VERSION,
             ),
         );
     }

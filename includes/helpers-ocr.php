@@ -1358,9 +1358,21 @@ function dcb_ocr_smoke_validation(?array $diag = null): array {
     $image_ok = !empty($readiness['image_ocr']) && in_array('eng', $langs, true);
     $scan_ok = !empty($readiness['scanned_pdf']) && !empty($checks['pdftoppm']['version']);
 
-    return array(
+    $checks = array(
         'plain_text_pdf_path' => array('ok' => $plain_ok, 'message' => $plain_ok ? 'pdftotext command is executable and responds to version probe.' : 'pdftotext is missing or not executable by PHP/web user.'),
         'image_ocr_path' => array('ok' => $image_ok, 'message' => $image_ok ? 'Tesseract command is executable and English OCR language is available.' : 'Tesseract is missing/not executable or English language data is unavailable.'),
         'scanned_pdf_rasterization_path' => array('ok' => $scan_ok, 'message' => $scan_ok ? 'pdftoppm rasterization command is executable for scanned PDF OCR fallback.' : 'pdftoppm is missing/not executable; scanned PDF OCR fallback is partial.'),
     );
+
+    $messages = array();
+    foreach ($checks as $row) {
+        if (is_array($row) && !empty($row['message'])) {
+            $messages[] = (string) $row['message'];
+        }
+    }
+
+    return array_merge($checks, array(
+        'ok' => $plain_ok && $image_ok && $scan_ok,
+        'messages' => $messages,
+    ));
 }

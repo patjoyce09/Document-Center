@@ -5,6 +5,8 @@ if (!defined('ABSPATH')) {
 }
 
 require_once DCB_PLUGIN_DIR . 'includes/class-settings.php';
+require_once DCB_PLUGIN_DIR . 'includes/class-permissions.php';
+require_once DCB_PLUGIN_DIR . 'includes/class-form-repository.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-forms.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-admin.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-assets.php';
@@ -32,6 +34,7 @@ final class DCB_Loader {
     }
 
     public static function activate(): void {
+        DCB_Permissions::activate();
         DCB_Settings::activate_defaults();
         DCB_Migrations::activate();
         DCB_Submissions::register_post_types();

@@ -5,7 +5,8 @@
   var forms = cfg.forms || {};
   var runtime = {
     activeFormKey: '',
-    activeStepIndex: 0
+    activeStepIndex: 0,
+    drawnSignatureData: ''
   };
 
   function el(tag, attrs, text) {
@@ -68,6 +69,79 @@
       }
     });
     return payload;
+  }
+
+  function signaturePanelHTML(currentUserName) {
+    return '<div class="th-df-signature-wrap">'
+      + '<h3>Signature</h3>'
+      + '<label class="th-df-label">Signature Mode</label>'
+      + '<select class="th-df-select" id="dcb-signature-mode">'
+      + '<option value="typed">Typed</option>'
+      + '<option value="drawn">Drawn</option>'
+      + '</select>'
+      + '<label class="th-df-label" for="dcb-signer-identity">Signer Identity</label>'
+      + '<input type="text" id="dcb-signer-identity" class="th-df-input" value="' + (currentUserName || '') + '" />'
+      + '<div id="dcb-signature-typed-wrap">'
+      + '<label class="th-df-label" for="dcb-signature-typed">Typed Signature</label>'
+      + '<input type="text" id="dcb-signature-typed" class="th-df-input" placeholder="Type your full name" />'
+      + '</div>'
+      + '<div id="dcb-signature-drawn-wrap" hidden>'
+      + '<label class="th-df-label">Drawn Signature</label>'
+      + '<canvas id="dcb-signature-canvas" width="540" height="170" style="width:100%;height:170px;border:1px solid #c8d3e6;border-radius:8px;background:#fff"></canvas>'
+      + '<div style="margin-top:6px;"><button type="button" class="th-df-btn" id="dcb-signature-clear">Clear Signature</button></div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  function setupSignatureCanvas() {
+    var canvas = document.getElementById('dcb-signature-canvas');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var drawing = false;
+
+    function point(evt) {
+      var rect = canvas.getBoundingClientRect();
+      var x = (evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left;
+      var y = (evt.touches ? evt.touches[0].clientY : evt.clientY) - rect.top;
+      return { x: x, y: y };
+    }
+
+    function start(evt) {
+      drawing = true;
+      var p = point(evt);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      evt.preventDefault();
+    }
+
+    function move(evt) {
+      if (!drawing) return;
+      var p = point(evt);
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#1d2c44';
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      evt.preventDefault();
+    }
+
+    function stop() {
+      if (!drawing) return;
+      drawing = false;
+      runtime.drawnSignatureData = canvas.toDataURL('image/png');
+    }
+
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', stop);
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', move, { passive: false });
+    canvas.addEventListener('touchend', stop);
+
+    $('#dcb-signature-clear').on('click', function () {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      runtime.drawnSignatureData = '';
+    });
   }
 
   function parseArrayJSON(value, fallback) {
@@ -173,6 +247,9 @@
           + '<button type="button" class="th-df-btn th-df-next-step">Next</button>'
           + '</div>');
       }
+
+      $form.append(signaturePanelHTML((cfg.currentUser && cfg.currentUser.name) || ''));
+      setupSignatureCanvas();
     });
   }
 
@@ -226,11 +303,24 @@
       renderForm(runtime.activeFormKey);
     });
 
+    $form.on('change', '#dcb-signature-mode', function () {
+      var mode = String($(this).val() || 'typed');
+      var isDrawn = mode === 'drawn';
+      $('#dcb-signature-typed-wrap').attr('hidden', isDrawn);
+      $('#dcb-signature-drawn-wrap').attr('hidden', !isDrawn);
+    });
+
     $('#th-df-submit').on('click', function () {
       var formKey = String($select.val() || '');
       if (!formKey) return;
 
       var fields = collectFields($form);
+      var signatureMode = String($('#dcb-signature-mode').val() || 'typed');
+      var signerIdentity = String($('#dcb-signer-identity').val() || '').trim();
+      var typedSignature = String($('#dcb-signature-typed').val() || '').trim();
+      if (typedSignature && !fields.signature_name) {
+        fields.signature_name = typedSignature;
+      }
       $status.text('Submitting...');
       $('#th-df-errors').empty().attr('hidden', true);
 
@@ -239,8 +329,12 @@
         nonce: cfg.nonce,
         form_key: formKey,
         fields: JSON.stringify(fields),
-        signature_mode: 'typed',
-        signer_identity: (cfg.currentUser && cfg.currentUser.name) || ''
+        signature_mode: signatureMode,
+        signature_drawn_data: signatureMode === 'drawn' ? runtime.drawnSignatureData : '',
+        signer_identity: signerIdentity || ((cfg.currentUser && cfg.currentUser.name) || ''),
+        signature_timestamp: new Date().toISOString(),
+        consent_text_version: (cfg.signature && cfg.signature.consentTextVersion) || '',
+        attestation_text_version: (cfg.signature && cfg.signature.attestationTextVersion) || ''
       }).done(function (res) {
         if (!res || !res.success) {
           var errors = res && res.data && res.data.errors ? res.data.errors : [(res && res.data && res.data.message) || 'Submission failed.'];

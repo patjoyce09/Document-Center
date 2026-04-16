@@ -53,6 +53,38 @@
     return form;
   }
 
+  function computeWarnings(form) {
+    var warnings = [];
+    var seen = {};
+    (form.fields || []).forEach(function (field) {
+      var key = String(field.key || '');
+      if (!key) {
+        warnings.push('A field has an empty key.');
+        return;
+      }
+      if (seen[key]) {
+        warnings.push('Duplicate field key: ' + key);
+      }
+      seen[key] = true;
+    });
+
+    (form.sections || []).forEach(function (section) {
+      (section.field_keys || []).forEach(function (k) {
+        if (!seen[String(k || '')]) {
+          warnings.push('Section "' + (section.label || section.key || 'section') + '" references missing field: ' + k);
+        }
+      });
+    });
+
+    (form.steps || []).forEach(function (step) {
+      if (!Array.isArray(step.section_keys) || !step.section_keys.length) {
+        warnings.push('Step "' + (step.label || step.key || 'step') + '" has no section references.');
+      }
+    });
+
+    return warnings;
+  }
+
   function renderBuilder($root, state) {
     var keys = Object.keys(state.forms || {});
     var selected = state.selectedKey && state.forms[state.selectedKey] ? state.selectedKey : (keys[0] || '');
@@ -103,11 +135,58 @@
             + '<td><input type="text" data-act="field-label" data-i="' + i + '" value="' + escapeHtml(field.label || '') + '"/></td>'
             + '<td><select data-act="field-type" data-i="' + i + '">' + renderTypeOptions(field.type || 'text') + '</select></td>'
             + '<td><input type="checkbox" data-act="field-required" data-i="' + i + '" ' + (field.required ? 'checked' : '') + '/></td>'
-            + '<td><button type="button" class="button-link-delete" data-act="field-delete" data-i="' + i + '">Delete</button></td>'
+            + '<td><button type="button" class="button" data-act="field-conditions" data-i="' + i + '">Conditions</button> <button type="button" class="button-link-delete" data-act="field-delete" data-i="' + i + '">Delete</button></td>'
             + '</tr>');
         });
       }
       listHtml.push('</tbody></table><p><button type="button" class="button" data-act="field-add">Add Field</button></p>');
+
+      listHtml.push('<h3>Structured Editors</h3>');
+      listHtml.push('<div class="dcb-builder-grid-two">');
+      listHtml.push('<div><h4>Sections</h4><table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Field Keys (csv)</th><th></th></tr></thead><tbody>');
+      (form.sections || []).forEach(function (section, i) {
+        listHtml.push('<tr>'
+          + '<td><input type="text" data-act="section-key" data-i="' + i + '" value="' + escapeHtml(section.key || '') + '"/></td>'
+          + '<td><input type="text" data-act="section-label" data-i="' + i + '" value="' + escapeHtml(section.label || '') + '"/></td>'
+          + '<td><input type="text" data-act="section-field-keys" data-i="' + i + '" value="' + escapeHtml((section.field_keys || []).join(',')) + '"/></td>'
+          + '<td><button type="button" class="button-link-delete" data-act="section-delete" data-i="' + i + '">Delete</button></td>'
+          + '</tr>');
+      });
+      listHtml.push('</tbody></table><p><button type="button" class="button" data-act="section-add">Add Section</button></p></div>');
+
+      listHtml.push('<div><h4>Steps</h4><table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Section Keys (csv)</th><th></th></tr></thead><tbody>');
+      (form.steps || []).forEach(function (step, i) {
+        listHtml.push('<tr>'
+          + '<td><input type="text" data-act="step-key" data-i="' + i + '" value="' + escapeHtml(step.key || '') + '"/></td>'
+          + '<td><input type="text" data-act="step-label" data-i="' + i + '" value="' + escapeHtml(step.label || '') + '"/></td>'
+          + '<td><input type="text" data-act="step-section-keys" data-i="' + i + '" value="' + escapeHtml((step.section_keys || []).join(',')) + '"/></td>'
+          + '<td><button type="button" class="button-link-delete" data-act="step-delete" data-i="' + i + '">Delete</button></td>'
+          + '</tr>');
+      });
+      listHtml.push('</tbody></table><p><button type="button" class="button" data-act="step-add">Add Step</button></p></div>');
+      listHtml.push('</div>');
+
+      listHtml.push('<div class="dcb-builder-grid-two">');
+      listHtml.push('<div><h4>Repeaters</h4><table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Field Keys (csv)</th><th>Min</th><th>Max</th><th></th></tr></thead><tbody>');
+      (form.repeaters || []).forEach(function (rep, i) {
+        listHtml.push('<tr>'
+          + '<td><input type="text" data-act="repeater-key" data-i="' + i + '" value="' + escapeHtml(rep.key || '') + '"/></td>'
+          + '<td><input type="text" data-act="repeater-label" data-i="' + i + '" value="' + escapeHtml(rep.label || '') + '"/></td>'
+          + '<td><input type="text" data-act="repeater-field-keys" data-i="' + i + '" value="' + escapeHtml((rep.field_keys || []).join(',')) + '"/></td>'
+          + '<td><input type="number" min="0" data-act="repeater-min" data-i="' + i + '" value="' + escapeHtml(String(rep.min || 0)) + '"/></td>'
+          + '<td><input type="number" min="0" data-act="repeater-max" data-i="' + i + '" value="' + escapeHtml(String(rep.max || 1)) + '"/></td>'
+          + '<td><button type="button" class="button-link-delete" data-act="repeater-delete" data-i="' + i + '">Delete</button></td>'
+          + '</tr>');
+      });
+      listHtml.push('</tbody></table><p><button type="button" class="button" data-act="repeater-add">Add Repeater</button></p></div>');
+
+      listHtml.push('<div><h4>Hard Stops & Nodes</h4>'
+        + '<p><button type="button" class="button" data-act="hardstop-add">Add Hard Stop</button> '
+        + '<button type="button" class="button" data-act="node-add-field">Add Field Node</button> '
+        + '<button type="button" class="button" data-act="node-add-block">Add Block Node</button></p>'
+        + '<p class="description">Use JSON panels below for full editing of hard stops/template blocks/document nodes.</p>'
+        + '</div>');
+      listHtml.push('</div>');
 
       listHtml.push('<h3>Sections / Steps / Repeaters</h3>');
       listHtml.push('<p><label>Sections JSON</label><textarea rows="5" data-act="sections-json" class="large-text code">' + escapeHtml(JSON.stringify(form.sections || [], null, 2)) + '</textarea></p>');
@@ -123,6 +202,18 @@
 
       listHtml.push('<h3>Runtime Preview Snapshot</h3>');
       listHtml.push('<pre class="dcb-preview-json">' + escapeHtml(JSON.stringify(form, null, 2)) + '</pre>');
+
+      var warnings = computeWarnings(form);
+      listHtml.push('<h3>Validation / Warning Panel</h3>');
+      if (!warnings.length) {
+        listHtml.push('<p class="dcb-warning-ok">No structural warnings.</p>');
+      } else {
+        listHtml.push('<ul class="dcb-warning-list">');
+        warnings.forEach(function (w) {
+          listHtml.push('<li>' + escapeHtml(w) + '</li>');
+        });
+        listHtml.push('</ul>');
+      }
     }
     listHtml.push('</div></div>');
     $root.html(listHtml.join(''));
@@ -228,6 +319,94 @@
       renderBuilder($root, state);
     });
 
+    $root.on('click', '[data-act="field-conditions"]', function () {
+      var key = state.selectedKey;
+      var i = Number($(this).data('i'));
+      if (!key || !state.forms[key]) return;
+      var form = normalizeFormShape(state.forms[key]);
+      var field = form.fields[i];
+      if (!field) return;
+      var existing = JSON.stringify(Array.isArray(field.conditions) ? field.conditions : [], null, 2);
+      var raw = prompt('Edit conditions JSON for field "' + (field.key || ('field #' + (i + 1))) + '"', existing);
+      if (raw === null) return;
+      var parsed = tryParseJSON(raw);
+      if (!Array.isArray(parsed)) {
+        alert('Conditions must be a JSON array.');
+        return;
+      }
+      field.conditions = parsed;
+      persist(state, $hidden, $advanced);
+      renderBuilder($root, state);
+    });
+
+    $root.on('click', '[data-act="section-add"]', function () {
+      var key = state.selectedKey;
+      if (!key || !state.forms[key]) return;
+      var form = normalizeFormShape(state.forms[key]);
+      var idx = form.sections.length + 1;
+      form.sections.push({ key: 'section_' + idx, label: 'Section ' + idx, field_keys: [] });
+      persist(state, $hidden, $advanced);
+      renderBuilder($root, state);
+    });
+
+    $root.on('click', '[data-act="step-add"]', function () {
+      var key = state.selectedKey;
+      if (!key || !state.forms[key]) return;
+      var form = normalizeFormShape(state.forms[key]);
+      var idx = form.steps.length + 1;
+      form.steps.push({ key: 'step_' + idx, label: 'Step ' + idx, section_keys: [] });
+      persist(state, $hidden, $advanced);
+      renderBuilder($root, state);
+    });
+
+    $root.on('click', '[data-act="repeater-add"]', function () {
+      var key = state.selectedKey;
+      if (!key || !state.forms[key]) return;
+      var form = normalizeFormShape(state.forms[key]);
+      var idx = form.repeaters.length + 1;
+      form.repeaters.push({ key: 'repeater_' + idx, label: 'Repeater ' + idx, field_keys: [], min: 0, max: 3 });
+      persist(state, $hidden, $advanced);
+      renderBuilder($root, state);
+    });
+
+    $root.on('click', '[data-act="section-delete"], [data-act="step-delete"], [data-act="repeater-delete"]', function () {
+      var key = state.selectedKey;
+      var i = Number($(this).data('i'));
+      var act = String($(this).data('act') || '');
+      if (!key || !state.forms[key]) return;
+      var form = normalizeFormShape(state.forms[key]);
+      if (act === 'section-delete' && i >= 0 && i < form.sections.length) form.sections.splice(i, 1);
+      if (act === 'step-delete' && i >= 0 && i < form.steps.length) form.steps.splice(i, 1);
+      if (act === 'repeater-delete' && i >= 0 && i < form.repeaters.length) form.repeaters.splice(i, 1);
+      persist(state, $hidden, $advanced);
+      renderBuilder($root, state);
+    });
+
+    $root.on('click', '[data-act="hardstop-add"]', function () {
+      var key = state.selectedKey;
+      if (!key || !state.forms[key]) return;
+      var form = normalizeFormShape(state.forms[key]);
+      form.hard_stops.push({ message: 'New hard stop', when: [] });
+      persist(state, $hidden, $advanced);
+      renderBuilder($root, state);
+    });
+
+    $root.on('click', '[data-act="node-add-field"], [data-act="node-add-block"]', function () {
+      var key = state.selectedKey;
+      var act = String($(this).data('act') || '');
+      if (!key || !state.forms[key]) return;
+      var form = normalizeFormShape(state.forms[key]);
+      if (act === 'node-add-field') {
+        var fieldKey = (form.fields[0] && form.fields[0].key) ? form.fields[0].key : '';
+        form.document_nodes.push({ type: 'field', field_key: fieldKey });
+      } else {
+        var blockId = (form.template_blocks[0] && form.template_blocks[0].block_id) ? form.template_blocks[0].block_id : '';
+        form.document_nodes.push({ type: 'block', block_id: blockId });
+      }
+      persist(state, $hidden, $advanced);
+      renderBuilder($root, state);
+    });
+
     $root.on('input change', 'input[data-act], select[data-act], textarea[data-act]', function () {
       var act = String($(this).data('act') || '');
       var key = state.selectedKey;
@@ -252,6 +431,26 @@
         if (act === 'field-label') form.fields[idx].label = val;
         if (act === 'field-type') form.fields[idx].type = val;
         if (act === 'field-required') form.fields[idx].required = !!val;
+      }
+
+      if (idx >= 0 && form.sections[idx]) {
+        if (act === 'section-key') form.sections[idx].key = slugify(val);
+        if (act === 'section-label') form.sections[idx].label = val;
+        if (act === 'section-field-keys') form.sections[idx].field_keys = String(val || '').split(',').map(function (v) { return slugify(v); }).filter(Boolean);
+      }
+
+      if (idx >= 0 && form.steps[idx]) {
+        if (act === 'step-key') form.steps[idx].key = slugify(val);
+        if (act === 'step-label') form.steps[idx].label = val;
+        if (act === 'step-section-keys') form.steps[idx].section_keys = String(val || '').split(',').map(function (v) { return slugify(v); }).filter(Boolean);
+      }
+
+      if (idx >= 0 && form.repeaters[idx]) {
+        if (act === 'repeater-key') form.repeaters[idx].key = slugify(val);
+        if (act === 'repeater-label') form.repeaters[idx].label = val;
+        if (act === 'repeater-field-keys') form.repeaters[idx].field_keys = String(val || '').split(',').map(function (v) { return slugify(v); }).filter(Boolean);
+        if (act === 'repeater-min') form.repeaters[idx].min = Math.max(0, Number(val) || 0);
+        if (act === 'repeater-max') form.repeaters[idx].max = Math.max(form.repeaters[idx].min || 0, Number(val) || 0);
       }
 
       if (act === 'sections-json' || act === 'steps-json' || act === 'repeaters-json' || act === 'hardstops-json' || act === 'template-json' || act === 'nodes-json') {

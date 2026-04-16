@@ -74,3 +74,9 @@
   gap: 8px;
   margin-top: 10px;
 }
+
+.th-df-signature-wrap {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #e1e7f2;
+}

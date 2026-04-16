@@ -38,11 +38,13 @@ final class DCB_Settings {
             'dcb_ocr_mode' => 'auto',
             'dcb_ocr_api_base_url' => '',
             'dcb_ocr_api_key' => '',
+            'dcb_ocr_api_auth_header' => 'X-API-Key',
             'dcb_ocr_timeout_seconds' => 30,
             'dcb_ocr_max_file_size_mb' => 15,
             'dcb_ocr_confidence_threshold' => 0.45,
             'dcb_tutor_integration_enabled' => '0',
             'dcb_tutor_mapping' => array(),
+            'dcb_forms_storage_mode' => 'option',
         );
     }
 
@@ -62,6 +64,7 @@ final class DCB_Settings {
         register_setting('dcb_settings_group', 'dcb_ocr_mode');
         register_setting('dcb_settings_group', 'dcb_ocr_api_base_url');
         register_setting('dcb_settings_group', 'dcb_ocr_api_key');
+        register_setting('dcb_settings_group', 'dcb_ocr_api_auth_header');
         register_setting('dcb_settings_group', 'dcb_ocr_timeout_seconds');
         register_setting('dcb_settings_group', 'dcb_ocr_max_file_size_mb');
         register_setting('dcb_settings_group', 'dcb_ocr_confidence_threshold');

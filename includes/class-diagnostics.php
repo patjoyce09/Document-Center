@@ -10,7 +10,7 @@ final class DCB_Diagnostics {
     }
 
     public static function render_settings_page(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS)) {
             wp_die('Unauthorized');
         }
 
@@ -44,12 +44,14 @@ final class DCB_Diagnostics {
         self::render_text_row('OCR Mode (local|remote|auto)', 'dcb_ocr_mode', $field('dcb_ocr_mode'));
         self::render_text_row('OCR API Base URL (HTTPS)', 'dcb_ocr_api_base_url', $field('dcb_ocr_api_base_url'));
         self::render_text_row('OCR API Key', 'dcb_ocr_api_key', $field('dcb_ocr_api_key'));
+        self::render_text_row('OCR API Auth Header', 'dcb_ocr_api_auth_header', $field('dcb_ocr_api_auth_header'));
         self::render_text_row('OCR Timeout Seconds', 'dcb_ocr_timeout_seconds', $field('dcb_ocr_timeout_seconds'));
         self::render_text_row('OCR Max File Size (MB)', 'dcb_ocr_max_file_size_mb', $field('dcb_ocr_max_file_size_mb'));
         self::render_text_row('OCR Confidence Threshold', 'dcb_ocr_confidence_threshold', $field('dcb_ocr_confidence_threshold'));
         self::render_text_row('Tesseract Path', 'dcb_upload_tesseract_path', $field('dcb_upload_tesseract_path'));
         self::render_text_row('pdftotext Path', 'dcb_upload_pdftotext_path', $field('dcb_upload_pdftotext_path'));
         self::render_text_row('pdftoppm Path', 'dcb_upload_pdftoppm_path', $field('dcb_upload_pdftoppm_path'));
+        self::render_text_row('Forms Storage Mode (option|cpt|table)', 'dcb_forms_storage_mode', $field('dcb_forms_storage_mode'));
 
         $checked = $field('dcb_upload_email_attachments') === '1';
         echo '<tr><th scope="row">Email Attachments</th><td>';
@@ -90,7 +92,7 @@ final class DCB_Diagnostics {
     }
 
     public static function save_settings(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS)) {
             wp_die('Unauthorized');
         }
 
@@ -111,11 +113,24 @@ final class DCB_Diagnostics {
             'dcb_ocr_mode',
             'dcb_ocr_api_base_url',
             'dcb_ocr_api_key',
+            'dcb_ocr_api_auth_header',
+            'dcb_forms_storage_mode',
         );
 
         foreach ($text_options as $opt) {
             $value = sanitize_text_field((string) ($_POST[$opt] ?? ''));
             update_option($opt, $value, false);
+        }
+
+        $ocr_mode = sanitize_key((string) get_option('dcb_ocr_mode', 'auto'));
+        if (!in_array($ocr_mode, array('local', 'remote', 'auto'), true)) {
+            $ocr_mode = 'auto';
+            update_option('dcb_ocr_mode', $ocr_mode, false);
+        }
+
+        $storage_mode = sanitize_key((string) get_option('dcb_forms_storage_mode', 'option'));
+        if (!in_array($storage_mode, array('option', 'cpt', 'table'), true)) {
+            update_option('dcb_forms_storage_mode', 'option', false);
         }
 
         $min_conf = isset($_POST['dcb_upload_min_confidence']) ? (float) $_POST['dcb_upload_min_confidence'] : 0.45;

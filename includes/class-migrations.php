@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class DCB_Migrations {
     private const OPTION_KEY = 'dcb_schema_version';
-    private const TARGET_VERSION = 3;
+    private const TARGET_VERSION = 4;
 
     public static function activate(): void {
         self::run();
@@ -63,6 +63,16 @@ final class DCB_Migrations {
             }
             if (get_option('dcb_tutor_mapping', null) === null) {
                 add_option('dcb_tutor_mapping', array(), '', false);
+            }
+            return;
+        }
+
+        if ($version === 4) {
+            if (get_option('dcb_forms_storage_mode', null) === null) {
+                add_option('dcb_forms_storage_mode', 'option', '', false);
+            }
+            if (get_option('dcb_ocr_api_auth_header', null) === null) {
+                add_option('dcb_ocr_api_auth_header', 'X-API-Key', '', false);
             }
         }
     }

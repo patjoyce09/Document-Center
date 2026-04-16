@@ -90,6 +90,24 @@
   padding: 8px;
 }
 
+.dcb-builder-grid-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 10px 0;
+}
+
+.dcb-warning-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #8a1d1d;
+}
+
+.dcb-warning-ok {
+  color: #1d6f42;
+  font-weight: 600;
+}
+
 .th-df-builder-loading {
   color: #44526d;
 }

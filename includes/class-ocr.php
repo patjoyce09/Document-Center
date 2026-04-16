@@ -10,7 +10,7 @@ final class DCB_OCR {
     }
 
     public static function smoke_validation_ajax(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
             wp_send_json_error(array('message' => 'Unauthorized'), 403);
         }
 
@@ -25,7 +25,7 @@ final class DCB_OCR {
     }
 
     public static function render_diagnostics_page(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
             wp_die('Unauthorized');
         }
 
@@ -59,6 +59,20 @@ final class DCB_OCR {
                 $ready = !empty($caps['ready']) ? 'ready' : 'not ready';
                 $status_text = sanitize_text_field((string) ($caps['status'] ?? 'unknown'));
                 echo '<li><strong>' . esc_html((string) $slug) . '</strong>: ' . esc_html($ready . ' (' . $status_text . ')') . '</li>';
+                if ($slug === 'remote') {
+                    $contract = sanitize_text_field((string) ($caps['contract_version'] ?? '')); 
+                    $auth_header = sanitize_text_field((string) ($caps['auth_header'] ?? '')); 
+                    if ($contract !== '') {
+                        echo '<li style="margin-left:18px;">Contract: ' . esc_html($contract) . '</li>';
+                    }
+                    if ($auth_header !== '') {
+                        echo '<li style="margin-left:18px;">Auth Header: ' . esc_html($auth_header) . '</li>';
+                    }
+                    $health_ok = !empty($caps['health']['ok']) ? 'ok' : 'failed';
+                    $caps_ok = !empty($caps['capabilities']['ok']) ? 'ok' : 'failed';
+                    echo '<li style="margin-left:18px;">Health Endpoint: ' . esc_html($health_ok) . '</li>';
+                    echo '<li style="margin-left:18px;">Capabilities Endpoint: ' . esc_html($caps_ok) . '</li>';
+                }
             }
             echo '</ul>';
         }

@@ -13,22 +13,23 @@ final class DCB_Admin {
         add_menu_page(
             __('Document Center', 'document-center-builder'),
             __('Document Center', 'document-center-builder'),
-            'manage_options',
+            DCB_Permissions::CAP_MANAGE_FORMS,
             'dcb-dashboard',
             array(__CLASS__, 'render_dashboard'),
             'dashicons-forms',
             35
         );
 
-        add_submenu_page('dcb-dashboard', __('Forms Builder', 'document-center-builder'), __('Builder', 'document-center-builder'), 'manage_options', 'dcb-builder', array('DCB_Builder', 'render_page'));
-        add_submenu_page('dcb-dashboard', __('Submissions', 'document-center-builder'), __('Submissions', 'document-center-builder'), 'manage_options', 'edit.php?post_type=dcb_form_submission');
-        add_submenu_page('dcb-dashboard', __('OCR Review Queue', 'document-center-builder'), __('OCR Review Queue', 'document-center-builder'), 'manage_options', 'edit.php?post_type=dcb_ocr_review_queue');
-        add_submenu_page('dcb-dashboard', __('OCR Diagnostics', 'document-center-builder'), __('OCR Diagnostics', 'document-center-builder'), 'manage_options', 'dcb-ocr-diagnostics', array('DCB_OCR', 'render_diagnostics_page'));
-        add_submenu_page('dcb-dashboard', __('Settings', 'document-center-builder'), __('Settings', 'document-center-builder'), 'manage_options', 'dcb-settings', array('DCB_Diagnostics', 'render_settings_page'));
+        add_submenu_page('dcb-dashboard', __('Forms Builder', 'document-center-builder'), __('Builder', 'document-center-builder'), DCB_Permissions::CAP_MANAGE_FORMS, 'dcb-builder', array('DCB_Builder', 'render_page'));
+        add_submenu_page('dcb-dashboard', __('Submissions', 'document-center-builder'), __('Submissions', 'document-center-builder'), DCB_Permissions::CAP_REVIEW_SUBMISSIONS, 'edit.php?post_type=dcb_form_submission');
+        add_submenu_page('dcb-dashboard', __('Reviewer Queue', 'document-center-builder'), __('Reviewer Queue', 'document-center-builder'), DCB_Permissions::CAP_REVIEW_SUBMISSIONS, 'dcb-review-queue', array('DCB_Workflow', 'render_queue_page'));
+        add_submenu_page('dcb-dashboard', __('OCR Review Queue', 'document-center-builder'), __('OCR Review Queue', 'document-center-builder'), DCB_Permissions::CAP_RUN_OCR_TOOLS, 'edit.php?post_type=dcb_ocr_review_queue');
+        add_submenu_page('dcb-dashboard', __('OCR Diagnostics', 'document-center-builder'), __('OCR Diagnostics', 'document-center-builder'), DCB_Permissions::CAP_RUN_OCR_TOOLS, 'dcb-ocr-diagnostics', array('DCB_OCR', 'render_diagnostics_page'));
+        add_submenu_page('dcb-dashboard', __('Settings', 'document-center-builder'), __('Settings', 'document-center-builder'), DCB_Permissions::CAP_MANAGE_SETTINGS, 'dcb-settings', array('DCB_Diagnostics', 'render_settings_page'));
     }
 
     public static function render_dashboard(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_FORMS)) {
             wp_die('Unauthorized');
         }
 

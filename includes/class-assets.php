@@ -19,6 +19,9 @@ final class DCB_Assets {
         if ($page !== 'dcb-builder') {
             return;
         }
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_FORMS)) {
+            return;
+        }
 
         $css_rel = 'assets/css/digital-form-builder-admin.css';
         $js_rel = 'assets/js/digital-form-builder-admin.js';

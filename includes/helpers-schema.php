@@ -855,7 +855,7 @@ function dcb_apply_versioning(array $incoming_form, ?array $existing_form): arra
 }
 
 function dcb_get_custom_forms(): array {
-    $raw = get_option('dcb_forms_custom', array());
+    $raw = class_exists('DCB_Form_Repository') ? DCB_Form_Repository::get_all_raw() : get_option('dcb_forms_custom', array());
     if (!is_array($raw)) {
         return array();
     }
