@@ -18,7 +18,7 @@ final class DCB_OCR_Engine_Local implements DCB_OCR_Engine {
     }
 
     public function capabilities(): array {
-        $diag = dcb_ocr_collect_environment_diagnostics();
+        $diag = dcb_ocr_collect_environment_diagnostics(false);
         return array(
             'ready' => (string) ($diag['status'] ?? 'missing') !== 'missing',
             'status' => (string) ($diag['status'] ?? 'missing'),

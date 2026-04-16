@@ -3,7 +3,7 @@
  * Plugin Name: Document Center Builder
  * Plugin URI: https://example.com
  * Description: Standalone digital document/form system with builder UI, conditional logic, OCR-assisted drafting, submissions, signatures, and diagnostics.
- * Version: 0.2.3
+ * Version: 0.2.4
  * Requires at least: 6.4
  * Requires PHP: 8.0
  * Author: Document Center
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 }
 
 if (!defined('DCB_VERSION')) {
-    define('DCB_VERSION', '0.2.3');
+    define('DCB_VERSION', '0.2.4');
 }
 if (!defined('DCB_PLUGIN_FILE')) {
     define('DCB_PLUGIN_FILE', __FILE__);

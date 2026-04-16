@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.3
+Stable tag: 0.2.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,9 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.4 =
+* Fixed recursive OCR diagnostics/provider capability calls that could cause blank Builder and OCR Diagnostics admin pages.
+
 = 0.2.3 =
 * Improved front-end shortcode detection using WordPress shortcode parsing so legacy and canonical portal tags load assets reliably even with attributes/format variations.
 

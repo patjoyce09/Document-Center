@@ -1269,7 +1269,7 @@ function dcb_ocr_get_tesseract_languages(string $tesseract_path): array {
     return $langs;
 }
 
-function dcb_ocr_collect_environment_diagnostics(): array {
+function dcb_ocr_collect_environment_diagnostics(bool $include_provider_diagnostics = true): array {
     $shell_enabled = dcb_ocr_shell_exec_enabled();
 
     $resolved = array(
@@ -1339,7 +1339,7 @@ function dcb_ocr_collect_environment_diagnostics(): array {
         'warnings' => array_values(array_unique($warnings)),
     );
 
-    if (class_exists('DCB_OCR_Engine_Manager')) {
+    if ($include_provider_diagnostics && class_exists('DCB_OCR_Engine_Manager')) {
         $out['provider_diagnostics'] = DCB_OCR_Engine_Manager::diagnostics();
     }
 
