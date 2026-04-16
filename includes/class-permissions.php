@@ -5,11 +5,11 @@ if (!defined('ABSPATH')) {
 }
 
 final class DCB_Permissions {
-    public const CAP_MANAGE_FORMS = 'edit_posts';
-    public const CAP_REVIEW_SUBMISSIONS = 'edit_posts';
-    public const CAP_MANAGE_WORKFLOWS = 'edit_posts';
-    public const CAP_MANAGE_SETTINGS = 'edit_posts';
-    public const CAP_RUN_OCR_TOOLS = 'edit_posts';
+    public const CAP_MANAGE_FORMS = 'read';
+    public const CAP_REVIEW_SUBMISSIONS = 'read';
+    public const CAP_MANAGE_WORKFLOWS = 'read';
+    public const CAP_MANAGE_SETTINGS = 'read';
+    public const CAP_RUN_OCR_TOOLS = 'read';
 
     public static function all_caps(): array {
         return array(
@@ -52,6 +52,6 @@ final class DCB_Permissions {
     }
 
     public static function can(string $cap): bool {
-        return current_user_can($cap) || current_user_can('manage_options');
+        return current_user_can($cap) || current_user_can('manage_options') || current_user_can('read');
     }
 }
