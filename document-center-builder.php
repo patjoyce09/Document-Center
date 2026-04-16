@@ -77,18 +77,14 @@ if (!function_exists('dcb_render_recovery_dashboard')) {
 
 if (!function_exists('dcb_register_recovery_menu')) {
     function dcb_register_recovery_menu(): void {
-        if (!current_user_can('activate_plugins')) {
-            return;
-        }
-
-        if (dcb_menu_slug_exists('dcb-dashboard')) {
+        if (!current_user_can('read')) {
             return;
         }
 
         add_menu_page(
             __('Document Center', 'document-center-builder'),
             __('Document Center', 'document-center-builder'),
-            'activate_plugins',
+            'read',
             'dcb-dashboard',
             'dcb_render_recovery_dashboard',
             'dashicons-forms',
@@ -97,7 +93,20 @@ if (!function_exists('dcb_register_recovery_menu')) {
     }
 }
 
+if (!function_exists('dcb_plugin_action_links')) {
+    function dcb_plugin_action_links(array $links): array {
+        if (!current_user_can('read')) {
+            return $links;
+        }
+
+        $open_link = '<a href="' . esc_url(admin_url('admin.php?page=dcb-dashboard')) . '">Open Document Center</a>';
+        array_unshift($links, $open_link);
+        return $links;
+    }
+}
+
 add_action('admin_menu', 'dcb_register_recovery_menu', 999);
+add_filter('plugin_action_links_' . DCB_PLUGIN_BASENAME, 'dcb_plugin_action_links');
 
 register_activation_hook(__FILE__, array('DCB_Loader', 'activate'));
 
