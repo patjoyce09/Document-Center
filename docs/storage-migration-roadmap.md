@@ -17,6 +17,7 @@ Move to a scalable storage model while preserving current behavior.
 - dual-read and optional dual-write toggles added.
 - admin migration utility + WP-CLI migration command added.
 - migration diagnostics/readiness summary added.
+- real CPT-backed form storage adapter implemented.
 
 ## Recommended migration sequence
 1. **Dual-read phase**

@@ -51,6 +51,10 @@ final class DCB_Uploader {
             $text_result = dcb_upload_extract_text_from_file($path, $mime);
             $ocr = (array) ($text_result['ocr'] ?? array());
             $confidence = isset($ocr['confidence_proxy']) ? (float) $ocr['confidence_proxy'] : 0.0;
+            if ($confidence <= 0.0 && isset($text_result['confidence']) && is_numeric($text_result['confidence'])) {
+                $confidence = (float) $text_result['confidence'];
+            }
+            $provenance = isset($text_result['provenance']) && is_array($text_result['provenance']) ? $text_result['provenance'] : array();
 
             $routing_target = self::resolve_recipients($hint);
             $status = 'routed';
@@ -66,6 +70,14 @@ final class DCB_Uploader {
                 'ocr_bucket' => dcb_confidence_bucket($confidence),
                 'ocr_text' => (string) ($text_result['text'] ?? ''),
                 'ocr_meta' => wp_json_encode($ocr),
+                'ocr_failure_reason' => sanitize_key((string) ($text_result['failure_reason'] ?? '')),
+                'ocr_request_id' => sanitize_text_field((string) ($provenance['request_id'] ?? '')),
+                'ocr_provider' => sanitize_text_field((string) ($provenance['provider'] ?? ($text_result['provider'] ?? 'local'))),
+                'ocr_provider_version' => sanitize_text_field((string) ($provenance['provider_version'] ?? '')),
+                'ocr_contract_version' => sanitize_text_field((string) ($provenance['contract_version'] ?? '')),
+                'ocr_engine_used' => sanitize_text_field((string) ($provenance['engine_used'] ?? ($text_result['engine_used'] ?? $text_result['engine'] ?? ''))),
+                'ocr_timings' => wp_json_encode((array) ($provenance['timings'] ?? ($text_result['timings'] ?? array()))),
+                'ocr_mode' => sanitize_key((string) ($provenance['mode'] ?? 'local')),
             ));
 
             if ($routing_target !== '') {

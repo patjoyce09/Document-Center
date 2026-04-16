@@ -10,9 +10,31 @@ final class DCB_Workflow {
         add_action('admin_post_dcb_workflow_transition', array(__CLASS__, 'handle_transition'));
         add_action('admin_post_dcb_workflow_note', array(__CLASS__, 'handle_note'));
         add_action('admin_post_dcb_workflow_queue_action', array(__CLASS__, 'handle_queue_action'));
+        add_filter('set-screen-option', array(__CLASS__, 'set_screen_option'), 10, 3);
         add_filter('bulk_actions-edit-dcb_form_submission', array(__CLASS__, 'register_bulk_actions'));
         add_filter('handle_bulk_actions-edit-dcb_form_submission', array(__CLASS__, 'handle_bulk_actions'), 10, 3);
         add_action('admin_notices', array(__CLASS__, 'bulk_action_notice'));
+    }
+
+    public static function on_queue_page_load(): void {
+        add_screen_option('per_page', array(
+            'label' => __('Reviewer Queue Items', 'document-center-builder'),
+            'default' => 20,
+            'option' => 'dcb_review_queue_per_page',
+        ));
+    }
+
+    public static function set_screen_option($status, string $option, $value) {
+        if ($option !== 'dcb_review_queue_per_page') {
+            return $status;
+        }
+
+        $value = (int) $value;
+        if ($value < 1) {
+            $value = 20;
+        }
+
+        return max(5, min(200, $value));
     }
 
     public static function statuses(): array {
@@ -121,7 +143,7 @@ final class DCB_Workflow {
         return is_array($timeline) ? $timeline : array();
     }
 
-    private static function timeline_entries_by_event(array $timeline, array $events, int $limit = 6): array {
+    public static function timeline_entries_by_event(array $timeline, array $events, int $limit = 6): array {
         $out = array();
         foreach ($timeline as $row) {
             if (!is_array($row)) {
@@ -141,7 +163,7 @@ final class DCB_Workflow {
         return $out;
     }
 
-    private static function timeline_row_message(array $row): string {
+    public static function timeline_row_message(array $row): string {
         $payload = isset($row['payload']) && is_array($row['payload']) ? $row['payload'] : array();
         if (!empty($payload['message'])) {
             return sanitize_textarea_field((string) $payload['message']);
@@ -156,7 +178,7 @@ final class DCB_Workflow {
         return '';
     }
 
-    private static function reviewer_display_label(?WP_User $user, int $id): string {
+    public static function reviewer_display_label(?WP_User $user, int $id): string {
         if ($user instanceof WP_User) {
             $name = trim((string) $user->display_name);
             if ($name !== '') {
@@ -169,6 +191,231 @@ final class DCB_Workflow {
         }
 
         return $id > 0 ? sprintf(__('User #%d', 'document-center-builder'), $id) : __('Unassigned', 'document-center-builder');
+    }
+
+    public static function get_queue_reviewers(): array {
+        $reviewers = get_users(array(
+            'fields' => array('ID', 'display_name', 'user_email'),
+            'orderby' => 'display_name',
+            'order' => 'ASC',
+            'capability' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+        ));
+
+        return is_array($reviewers) ? $reviewers : array();
+    }
+
+    public static function get_queue_roles(): array {
+        global $wp_roles;
+        return is_object($wp_roles) ? (array) $wp_roles->roles : array();
+    }
+
+    public static function get_queue_filters_from_request(?array $request = null): array {
+        $request = is_array($request) ? $request : $_REQUEST;
+
+        return array(
+            'status' => isset($request['workflow_status']) ? sanitize_key((string) $request['workflow_status']) : '',
+            'assignee' => isset($request['workflow_assignee']) ? (int) $request['workflow_assignee'] : -1,
+            'role' => isset($request['workflow_role']) ? sanitize_key((string) $request['workflow_role']) : '',
+            'form' => isset($request['workflow_form']) ? sanitize_key((string) $request['workflow_form']) : '',
+            'date_from' => isset($request['workflow_date_from']) ? sanitize_text_field((string) $request['workflow_date_from']) : '',
+            'date_to' => isset($request['workflow_date_to']) ? sanitize_text_field((string) $request['workflow_date_to']) : '',
+        );
+    }
+
+    public static function queue_meta_query(array $filters): array {
+        $statuses = self::statuses();
+        $meta_query = array('relation' => 'AND');
+
+        $status = sanitize_key((string) ($filters['status'] ?? ''));
+        if ($status !== '' && isset($statuses[$status])) {
+            $meta_query[] = array('key' => '_dcb_workflow_status', 'value' => $status);
+        }
+
+        $assignee = isset($filters['assignee']) ? (int) $filters['assignee'] : -1;
+        if ($assignee >= 0) {
+            $meta_query[] = array('key' => '_dcb_workflow_assignee_user_id', 'value' => $assignee);
+        }
+
+        $role = sanitize_key((string) ($filters['role'] ?? ''));
+        if ($role !== '') {
+            $meta_query[] = array('key' => '_dcb_workflow_assignee_role', 'value' => $role);
+        }
+
+        $form = sanitize_key((string) ($filters['form'] ?? ''));
+        if ($form !== '') {
+            $meta_query[] = array('key' => '_dcb_form_key', 'value' => $form);
+        }
+
+        return count($meta_query) > 1 ? $meta_query : array();
+    }
+
+    public static function queue_date_query(array $filters): array {
+        $date_from = sanitize_text_field((string) ($filters['date_from'] ?? ''));
+        $date_to = sanitize_text_field((string) ($filters['date_to'] ?? ''));
+        if ($date_from === '' && $date_to === '') {
+            return array();
+        }
+
+        $range = array('inclusive' => true);
+        if ($date_from !== '') {
+            $range['after'] = $date_from;
+        }
+        if ($date_to !== '') {
+            $range['before'] = $date_to;
+        }
+
+        return array($range);
+    }
+
+    public static function queue_latest_thread_snippets(int $submission_id): array {
+        $timeline = self::get_timeline($submission_id);
+        $review_notes = self::timeline_entries_by_event($timeline, array('review_note'), 1);
+        $correction_notes = self::timeline_entries_by_event($timeline, array('correction_request'), 1);
+
+        $latest_review = !empty($review_notes) ? self::timeline_row_message($review_notes[count($review_notes) - 1]) : '';
+        $latest_correction = !empty($correction_notes) ? self::timeline_row_message($correction_notes[count($correction_notes) - 1]) : '';
+
+        return array(
+            'review' => $latest_review,
+            'correction' => $latest_correction,
+        );
+    }
+
+    public static function queue_state_snapshot(int $submission_id): array {
+        return array(
+            'status' => self::get_status($submission_id),
+            'assignee_user_id' => (int) get_post_meta($submission_id, '_dcb_workflow_assignee_user_id', true),
+            'assignee_role' => sanitize_key((string) get_post_meta($submission_id, '_dcb_workflow_assignee_role', true)),
+            'finalized' => self::get_status($submission_id) === 'finalized' ? 1 : 0,
+        );
+    }
+
+    public static function queue_state_token(int $submission_id): string {
+        $snapshot = self::queue_state_snapshot($submission_id);
+        return sha1((string) wp_json_encode(array($submission_id, $snapshot), JSON_UNESCAPED_SLASHES));
+    }
+
+    public static function queue_age_days(int $submission_id): int {
+        $submitted_at = sanitize_text_field((string) get_post_meta($submission_id, '_dcb_form_submitted_at', true));
+        $ts = $submitted_at !== '' ? strtotime($submitted_at) : false;
+        if ($ts === false || $ts <= 0) {
+            return 0;
+        }
+
+        $age_seconds = max(0, time() - $ts);
+        $day_seconds = defined('DAY_IN_SECONDS') ? (int) DAY_IN_SECONDS : 86400;
+        return (int) floor($age_seconds / max(1, $day_seconds));
+    }
+
+    public static function queue_signals_for_submission(int $submission_id): array {
+        $status = self::get_status($submission_id);
+        $age_days = self::queue_age_days($submission_id);
+        $stale = in_array($status, array('submitted', 'in_review', 'needs_correction'), true) && $age_days >= 7;
+        $overdue = in_array($status, array('submitted', 'in_review'), true) && $age_days >= 14;
+
+        return array(
+            'age_days' => $age_days,
+            'stale' => $stale,
+            'overdue' => $overdue,
+            'status' => $status,
+        );
+    }
+
+    public static function queue_analytics_summary(): array {
+        $summary = array(
+            'aging_buckets' => array('0_2' => 0, '3_7' => 0, '8_14' => 0, '15_plus' => 0),
+            'stale_reviews' => 0,
+            'overdue_reviews' => 0,
+            'assignee_workload' => array(),
+        );
+
+        $query = new WP_Query(array(
+            'post_type' => 'dcb_form_submission',
+            'post_status' => 'publish',
+            'posts_per_page' => 500,
+            'fields' => 'ids',
+            'no_found_rows' => true,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ));
+
+        foreach ((array) $query->posts as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id < 1) {
+                continue;
+            }
+
+            $signal = self::queue_signals_for_submission($post_id);
+            $age_days = (int) ($signal['age_days'] ?? 0);
+            if ($age_days <= 2) {
+                $summary['aging_buckets']['0_2']++;
+            } elseif ($age_days <= 7) {
+                $summary['aging_buckets']['3_7']++;
+            } elseif ($age_days <= 14) {
+                $summary['aging_buckets']['8_14']++;
+            } else {
+                $summary['aging_buckets']['15_plus']++;
+            }
+
+            if (!empty($signal['stale'])) {
+                $summary['stale_reviews']++;
+            }
+            if (!empty($signal['overdue'])) {
+                $summary['overdue_reviews']++;
+            }
+
+            $assignee = (int) get_post_meta($post_id, '_dcb_workflow_assignee_user_id', true);
+            $workload_key = $assignee > 0 ? (string) $assignee : 'unassigned';
+            if (!isset($summary['assignee_workload'][$workload_key])) {
+                $summary['assignee_workload'][$workload_key] = 0;
+            }
+            $summary['assignee_workload'][$workload_key]++;
+        }
+
+        arsort($summary['assignee_workload']);
+        $summary['assignee_workload'] = array_slice($summary['assignee_workload'], 0, 8, true);
+
+        return $summary;
+    }
+
+    public static function queue_health_summary(): array {
+        $summary = array(
+            'submitted' => 0,
+            'in_review' => 0,
+            'needs_correction' => 0,
+            'approved' => 0,
+            'finalized' => 0,
+            'stale_reviews' => 0,
+            'overdue_reviews' => 0,
+        );
+
+        $query = new WP_Query(array(
+            'post_type' => 'dcb_form_submission',
+            'post_status' => 'publish',
+            'posts_per_page' => 200,
+            'fields' => 'ids',
+            'no_found_rows' => true,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ));
+
+        foreach ((array) $query->posts as $post_id) {
+            $status = self::get_status((int) $post_id);
+            if (!isset($summary[$status])) {
+                continue;
+            }
+            $summary[$status]++;
+
+            $signals = self::queue_signals_for_submission((int) $post_id);
+            if (!empty($signals['stale'])) {
+                $summary['stale_reviews']++;
+            }
+            if (!empty($signals['overdue'])) {
+                $summary['overdue_reviews']++;
+            }
+        }
+
+        return $summary;
     }
 
     public static function register_meta_box(): void {
@@ -405,50 +652,287 @@ final class DCB_Workflow {
         }
         $submission_ids = array_values(array_unique($submission_ids));
 
+        $result = self::execute_queue_action($queue_action, $submission_ids, $_POST);
+
+        $redirect = add_query_arg(array(
+            'page' => 'dcb-review-queue',
+            'queue_notice' => rawurlencode((string) ($result['message'] ?? __('No queue changes were applied.', 'document-center-builder'))),
+            'queue_notice_type' => sanitize_key((string) ($result['type'] ?? 'warning')),
+        ), admin_url('admin.php'));
+
+        wp_safe_redirect($redirect);
+        exit;
+    }
+
+    private static function execute_queue_action(string $queue_action, array $submission_ids, array $payload): array {
+        $queue_action = sanitize_key($queue_action);
+
         $changed = 0;
+        $invalid_assignee = 0;
+        $invalid_transition = 0;
+        $conflicts = 0;
+        $not_found = 0;
+        $finalized_protected = 0;
+        $stale_state = 0;
+        $state_tokens = isset($payload['state_tokens']) && is_array($payload['state_tokens']) ? $payload['state_tokens'] : array();
+
         if (!empty($submission_ids)) {
             if ($queue_action === 'quick_assign') {
-                $assignee_user_id = isset($_POST['assignee_user_id']) ? (int) $_POST['assignee_user_id'] : 0;
+                $assignee_user_id = isset($payload['assignee_user_id']) ? (int) $payload['assignee_user_id'] : 0;
+                $expected_assignee = isset($payload['expected_assignee_user_id']) ? (int) $payload['expected_assignee_user_id'] : null;
+                $state_token = sanitize_text_field((string) ($payload['state_token'] ?? ''));
                 foreach ($submission_ids as $submission_id) {
+                    if (!self::is_valid_assignee($assignee_user_id)) {
+                        $invalid_assignee++;
+                        continue;
+                    }
+                    if (!self::is_valid_submission($submission_id)) {
+                        $not_found++;
+                        continue;
+                    }
+
+                    $submission_id = (int) $submission_id;
+                    $current_status = self::get_status($submission_id);
+                    if ($current_status === 'finalized') {
+                        $finalized_protected++;
+                        continue;
+                    }
+
+                    if ($expected_assignee !== null && (int) get_post_meta($submission_id, '_dcb_workflow_assignee_user_id', true) !== (int) $expected_assignee) {
+                        $stale_state++;
+                        continue;
+                    }
+                    if ($state_token !== '' && !self::queue_state_token_matches($submission_id, $state_token)) {
+                        $stale_state++;
+                        continue;
+                    }
+
                     self::assign_reviewer((int) $submission_id, max(0, $assignee_user_id));
                     $changed++;
                 }
             } elseif ($queue_action === 'quick_transition') {
-                $to_status = sanitize_key((string) ($_POST['to_status'] ?? ''));
+                $to_status = sanitize_key((string) ($payload['to_status'] ?? ''));
+                $from_status = sanitize_key((string) ($payload['from_status'] ?? ''));
+                $state_token = sanitize_text_field((string) ($payload['state_token'] ?? ''));
                 foreach ($submission_ids as $submission_id) {
-                    if (self::set_status((int) $submission_id, $to_status, 'Queue quick transition')) {
+                    if (!self::is_valid_submission($submission_id)) {
+                        $not_found++;
+                        continue;
+                    }
+
+                    $submission_id = (int) $submission_id;
+                    $current_status = self::get_status($submission_id);
+                    if ($current_status === 'finalized') {
+                        $finalized_protected++;
+                        continue;
+                    }
+                    if ($from_status !== '' && $current_status !== $from_status) {
+                        $stale_state++;
+                        continue;
+                    }
+                    if ($state_token !== '' && !self::queue_state_token_matches($submission_id, $state_token)) {
+                        $stale_state++;
+                        continue;
+                    }
+
+                    if (self::set_status($submission_id, $to_status, 'Queue quick transition')) {
                         if ($to_status === 'finalized') {
-                            dcb_finalize_submission_output((int) $submission_id, get_current_user_id());
+                            dcb_finalize_submission_output($submission_id, get_current_user_id());
                         }
                         $changed++;
+                    } else {
+                        $invalid_transition++;
                     }
                 }
             } elseif ($queue_action === 'bulk_transition') {
-                $to_status = sanitize_key((string) ($_POST['bulk_to_status'] ?? ''));
+                $to_status = sanitize_key((string) ($payload['bulk_to_status'] ?? ''));
                 foreach ($submission_ids as $submission_id) {
-                    if (self::set_status((int) $submission_id, $to_status, 'Queue bulk transition')) {
+                    if (!self::is_valid_submission($submission_id)) {
+                        $not_found++;
+                        continue;
+                    }
+
+                    $submission_id = (int) $submission_id;
+                    if (self::get_status($submission_id) === 'finalized') {
+                        $finalized_protected++;
+                        continue;
+                    }
+
+                    if (isset($state_tokens[$submission_id])) {
+                        $token = sanitize_text_field((string) $state_tokens[$submission_id]);
+                        if ($token !== '' && !self::queue_state_token_matches($submission_id, $token)) {
+                            $stale_state++;
+                            continue;
+                        }
+                    }
+
+                    if (self::set_status($submission_id, $to_status, 'Queue bulk transition')) {
                         if ($to_status === 'finalized') {
-                            dcb_finalize_submission_output((int) $submission_id, get_current_user_id());
+                            dcb_finalize_submission_output($submission_id, get_current_user_id());
                         }
                         $changed++;
+                    } else {
+                        $invalid_transition++;
                     }
                 }
             } elseif ($queue_action === 'bulk_assign') {
-                $assignee_user_id = isset($_POST['bulk_assignee_user_id']) ? (int) $_POST['bulk_assignee_user_id'] : 0;
+                $assignee_user_id = isset($payload['bulk_assignee_user_id']) ? (int) $payload['bulk_assignee_user_id'] : 0;
                 foreach ($submission_ids as $submission_id) {
-                    self::assign_reviewer((int) $submission_id, max(0, $assignee_user_id));
+                    if (!self::is_valid_assignee($assignee_user_id)) {
+                        $invalid_assignee++;
+                        continue;
+                    }
+                    if (!self::is_valid_submission($submission_id)) {
+                        $not_found++;
+                        continue;
+                    }
+
+                    $submission_id = (int) $submission_id;
+                    if (self::get_status($submission_id) === 'finalized') {
+                        $finalized_protected++;
+                        continue;
+                    }
+
+                    if (isset($state_tokens[$submission_id])) {
+                        $token = sanitize_text_field((string) $state_tokens[$submission_id]);
+                        if ($token !== '' && !self::queue_state_token_matches($submission_id, $token)) {
+                            $stale_state++;
+                            continue;
+                        }
+                    }
+
+                    self::assign_reviewer($submission_id, max(0, $assignee_user_id));
                     $changed++;
                 }
             }
         }
 
-        $redirect = add_query_arg(array(
-            'page' => 'dcb-review-queue',
-            'queue_updated' => $changed,
-        ), admin_url('admin.php'));
+        $notice_parts = array();
+        $type = 'success';
+        if ($changed > 0) {
+            $notice_parts[] = sprintf(__('%d queue item(s) updated.', 'document-center-builder'), $changed);
+        }
+        if ($invalid_transition > 0) {
+            $notice_parts[] = sprintf(__('%d item(s) skipped due to invalid status transition for current state.', 'document-center-builder'), $invalid_transition);
+            $type = 'warning';
+        }
+        if ($invalid_assignee > 0) {
+            $notice_parts[] = sprintf(__('%d item(s) skipped due to invalid assignee.', 'document-center-builder'), $invalid_assignee);
+            $type = 'warning';
+        }
+        if ($finalized_protected > 0) {
+            $notice_parts[] = sprintf(__('%d item(s) skipped because finalized submissions are protected.', 'document-center-builder'), $finalized_protected);
+            $type = 'warning';
+        }
+        if ($stale_state > 0) {
+            $notice_parts[] = sprintf(__('%d item(s) skipped because queue state changed before apply. Refresh queue and retry.', 'document-center-builder'), $stale_state);
+            $type = 'warning';
+        }
+        if ($conflicts > 0) {
+            $notice_parts[] = sprintf(__('%d item(s) skipped due to status conflict.', 'document-center-builder'), $conflicts);
+            $type = 'warning';
+        }
+        if ($not_found > 0) {
+            $notice_parts[] = sprintf(__('%d item(s) were missing or no longer available.', 'document-center-builder'), $not_found);
+            $type = 'warning';
+        }
+        if (empty($notice_parts)) {
+            $notice_parts[] = __('No queue changes were applied.', 'document-center-builder');
+            $type = 'warning';
+        }
 
-        wp_safe_redirect($redirect);
-        exit;
+        self::record_queue_failure_summary($queue_action, array(
+            'changed' => $changed,
+            'invalid_transition' => $invalid_transition,
+            'invalid_assignee' => $invalid_assignee,
+            'conflicts' => $conflicts,
+            'stale_state' => $stale_state,
+            'finalized_protected' => $finalized_protected,
+            'not_found' => $not_found,
+            'notice' => implode(' ', $notice_parts),
+        ));
+
+        return array(
+            'message' => implode(' ', $notice_parts),
+            'type' => $type,
+            'changed' => $changed,
+            'invalid_transition' => $invalid_transition,
+            'invalid_assignee' => $invalid_assignee,
+            'conflicts' => $conflicts,
+            'stale_state' => $stale_state,
+            'finalized_protected' => $finalized_protected,
+            'not_found' => $not_found,
+        );
+    }
+
+    private static function queue_state_token_matches(int $submission_id, string $token): bool {
+        $token = sanitize_text_field($token);
+        if ($token === '') {
+            return true;
+        }
+
+        return hash_equals(self::queue_state_token($submission_id), $token);
+    }
+
+    private static function record_queue_failure_summary(string $queue_action, array $result): void {
+        $failures = (int) ($result['invalid_transition'] ?? 0)
+            + (int) ($result['invalid_assignee'] ?? 0)
+            + (int) ($result['conflicts'] ?? 0)
+            + (int) ($result['stale_state'] ?? 0)
+            + (int) ($result['finalized_protected'] ?? 0)
+            + (int) ($result['not_found'] ?? 0);
+
+        if ($failures < 1) {
+            return;
+        }
+
+        $rows = get_option('dcb_workflow_recent_queue_failures', array());
+        if (!is_array($rows)) {
+            $rows = array();
+        }
+
+        $rows[] = array(
+            'time' => current_time('mysql'),
+            'action' => sanitize_key($queue_action),
+            'actor_user_id' => (int) get_current_user_id(),
+            'summary' => sanitize_text_field((string) ($result['notice'] ?? 'Queue action reported skipped items.')),
+            'counts' => array(
+                'invalid_transition' => (int) ($result['invalid_transition'] ?? 0),
+                'invalid_assignee' => (int) ($result['invalid_assignee'] ?? 0),
+                'conflicts' => (int) ($result['conflicts'] ?? 0),
+                'stale_state' => (int) ($result['stale_state'] ?? 0),
+                'finalized_protected' => (int) ($result['finalized_protected'] ?? 0),
+                'not_found' => (int) ($result['not_found'] ?? 0),
+            ),
+        );
+
+        if (count($rows) > 25) {
+            $rows = array_slice($rows, -25);
+        }
+
+        update_option('dcb_workflow_recent_queue_failures', $rows, false);
+    }
+
+    private static function is_valid_submission(int $submission_id): bool {
+        if ($submission_id < 1) {
+            return false;
+        }
+
+        $post = get_post($submission_id);
+        return $post instanceof WP_Post && $post->post_type === 'dcb_form_submission';
+    }
+
+    private static function is_valid_assignee(int $assignee_user_id): bool {
+        if ($assignee_user_id <= 0) {
+            return true;
+        }
+
+        $user = get_user_by('id', $assignee_user_id);
+        if (!$user instanceof WP_User) {
+            return false;
+        }
+
+        return user_can($user, DCB_Permissions::CAP_REVIEW_SUBMISSIONS);
     }
 
     public static function register_bulk_actions(array $actions): array {
@@ -511,258 +995,127 @@ final class DCB_Workflow {
             wp_die('Unauthorized');
         }
 
-        $status_filter = isset($_GET['workflow_status']) ? sanitize_key((string) $_GET['workflow_status']) : '';
-        $assignee_filter = isset($_GET['workflow_assignee']) ? (int) $_GET['workflow_assignee'] : -1;
-        $role_filter = isset($_GET['workflow_role']) ? sanitize_key((string) $_GET['workflow_role']) : '';
-        $form_filter = isset($_GET['workflow_form']) ? sanitize_key((string) $_GET['workflow_form']) : '';
-        $date_from = isset($_GET['workflow_date_from']) ? sanitize_text_field((string) $_GET['workflow_date_from']) : '';
-        $date_to = isset($_GET['workflow_date_to']) ? sanitize_text_field((string) $_GET['workflow_date_to']) : '';
-        $paged = max(1, isset($_GET['paged']) ? (int) $_GET['paged'] : 1);
-        $statuses = self::statuses();
-
-        $reviewers = get_users(array(
-            'fields' => array('ID', 'display_name', 'user_email'),
-            'orderby' => 'display_name',
-            'order' => 'ASC',
-            'capability' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
-        ));
-        if (!is_array($reviewers)) {
-            $reviewers = array();
+        if (!class_exists('DCB_Workflow_Queue_Table')) {
+            require_once DCB_PLUGIN_DIR . 'includes/class-workflow-queue-table.php';
         }
 
-        global $wp_roles;
-        $editable_roles = is_object($wp_roles) ? (array) $wp_roles->roles : array();
+        $table = new DCB_Workflow_Queue_Table();
+        self::handle_queue_table_bulk_action($table);
+        $table->prepare_items();
 
-        $meta_query = array('relation' => 'AND');
-        if ($status_filter !== '' && isset($statuses[$status_filter])) {
-            $meta_query[] = array('key' => '_dcb_workflow_status', 'value' => $status_filter);
-        }
-        if ($assignee_filter >= 0) {
-            $meta_query[] = array('key' => '_dcb_workflow_assignee_user_id', 'value' => $assignee_filter);
-        }
-        if ($role_filter !== '') {
-            $meta_query[] = array('key' => '_dcb_workflow_assignee_role', 'value' => $role_filter);
-        }
-        if ($form_filter !== '') {
-            $meta_query[] = array('key' => '_dcb_form_key', 'value' => $form_filter);
-        }
-
-        $date_query = array();
-        if ($date_from !== '' || $date_to !== '') {
-            $range = array('inclusive' => true);
-            if ($date_from !== '') {
-                $range['after'] = $date_from;
-            }
-            if ($date_to !== '') {
-                $range['before'] = $date_to;
-            }
-            $date_query[] = $range;
-        }
-
-        $query = new WP_Query(array(
-            'post_type' => 'dcb_form_submission',
-            'post_status' => 'publish',
-            'posts_per_page' => 40,
-            'paged' => $paged,
-            'orderby' => 'date',
-            'order' => 'DESC',
-            'meta_query' => count($meta_query) > 1 ? $meta_query : array(),
-            'date_query' => $date_query,
-        ));
+        $health = self::queue_health_summary();
+        $analytics = self::queue_analytics_summary();
 
         echo '<div class="wrap"><h1>' . esc_html__('Reviewer Queue', 'document-center-builder') . '</h1>';
         echo '<p>' . esc_html__('Review, route, request corrections, and finalize submissions.', 'document-center-builder') . '</p>';
+        echo '<p class="description">' . esc_html__('Use filters and bulk actions below. Quick row actions are available in the Actions column.', 'document-center-builder') . '</p>';
 
-        if (isset($_GET['queue_updated'])) {
-            $updated = (int) $_GET['queue_updated'];
-            if ($updated > 0) {
-                echo '<div class="notice notice-success is-dismissible"><p>' . esc_html(sprintf(__('%d queue item(s) updated.', 'document-center-builder'), $updated)) . '</p></div>';
+        if (isset($_GET['queue_notice'])) {
+            $type = sanitize_key((string) ($_GET['queue_notice_type'] ?? 'success'));
+            if (!in_array($type, array('success', 'warning', 'error', 'info'), true)) {
+                $type = 'info';
             }
+            echo '<div class="notice notice-' . esc_attr($type) . ' is-dismissible"><p>' . esc_html(sanitize_text_field((string) $_GET['queue_notice'])) . '</p></div>';
         }
 
-        echo '<form method="get" action="' . esc_url(admin_url('admin.php')) . '" style="margin-bottom:12px; display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end;">';
+        echo '<div class="notice notice-info inline"><p>';
+        echo esc_html(sprintf(
+            __('Queue health — Submitted: %1$d | In Review: %2$d | Needs Correction: %3$d | Approved: %4$d | Finalized: %5$d | Stale: %6$d | Overdue: %7$d', 'document-center-builder'),
+            (int) ($health['submitted'] ?? 0),
+            (int) ($health['in_review'] ?? 0),
+            (int) ($health['needs_correction'] ?? 0),
+            (int) ($health['approved'] ?? 0),
+            (int) ($health['finalized'] ?? 0),
+            (int) ($health['stale_reviews'] ?? 0),
+            (int) ($health['overdue_reviews'] ?? 0)
+        ));
+        echo '</p></div>';
+
+        $workload_bits = array();
+        foreach ((array) ($analytics['assignee_workload'] ?? array()) as $assignee_key => $count) {
+            $label = (string) $assignee_key;
+            if ($assignee_key === 'unassigned') {
+                $label = __('Unassigned', 'document-center-builder');
+            } else {
+                $user = get_user_by('id', (int) $assignee_key);
+                $label = self::reviewer_display_label($user instanceof WP_User ? $user : null, (int) $assignee_key);
+            }
+            $workload_bits[] = $label . ': ' . (int) $count;
+        }
+        if (!empty($workload_bits)) {
+            echo '<p class="description">' . esc_html__('Assignee workload:', 'document-center-builder') . ' ' . esc_html(implode(' | ', $workload_bits)) . '</p>';
+        }
+
+        echo '<form method="get">';
         echo '<input type="hidden" name="page" value="dcb-review-queue" />';
-        echo '<span><label for="dcb-workflow-status-filter"><strong>' . esc_html__('Status', 'document-center-builder') . '</strong></label><br/>';
-        echo '<select id="dcb-workflow-status-filter" name="workflow_status">';
-        echo '<option value="">' . esc_html__('All', 'document-center-builder') . '</option>';
-        foreach ($statuses as $key => $label) {
-            echo '<option value="' . esc_attr($key) . '" ' . selected($status_filter, $key, false) . '>' . esc_html($label) . '</option>';
-        }
-        echo '</select></span>';
-
-        echo '<span><label for="dcb-workflow-assignee-filter"><strong>' . esc_html__('Assignee', 'document-center-builder') . '</strong></label><br/>';
-        echo '<select id="dcb-workflow-assignee-filter" name="workflow_assignee">';
-        echo '<option value="-1">' . esc_html__('All', 'document-center-builder') . '</option>';
-        echo '<option value="0" ' . selected($assignee_filter, 0, false) . '>' . esc_html__('Unassigned', 'document-center-builder') . '</option>';
-        foreach ($reviewers as $reviewer) {
-            if (!$reviewer instanceof WP_User) {
-                continue;
-            }
-            echo '<option value="' . esc_attr((string) $reviewer->ID) . '" ' . selected($assignee_filter, (int) $reviewer->ID, false) . '>' . esc_html(self::reviewer_display_label($reviewer, (int) $reviewer->ID)) . '</option>';
-        }
-        echo '</select></span>';
-
-        echo '<span><label for="dcb-workflow-role-filter"><strong>' . esc_html__('Role Queue', 'document-center-builder') . '</strong></label><br/>';
-        echo '<select id="dcb-workflow-role-filter" name="workflow_role">';
-        echo '<option value="">' . esc_html__('All', 'document-center-builder') . '</option>';
-        foreach ($editable_roles as $role_key => $role_data) {
-            $role_key = sanitize_key((string) $role_key);
-            $name = is_array($role_data) ? (string) ($role_data['name'] ?? $role_key) : $role_key;
-            echo '<option value="' . esc_attr($role_key) . '" ' . selected($role_filter, $role_key, false) . '>' . esc_html($name) . '</option>';
-        }
-        echo '</select></span>';
-
-        echo '<span><label for="dcb-workflow-form-filter"><strong>' . esc_html__('Form Key', 'document-center-builder') . '</strong></label><br/>';
-        echo '<input type="text" id="dcb-workflow-form-filter" name="workflow_form" value="' . esc_attr($form_filter) . '" class="regular-text" /></span>';
-
-        echo '<span><label for="dcb-workflow-date-from"><strong>' . esc_html__('From', 'document-center-builder') . '</strong></label><br/>';
-        echo '<input type="date" id="dcb-workflow-date-from" name="workflow_date_from" value="' . esc_attr($date_from) . '" /></span>';
-
-        echo '<span><label for="dcb-workflow-date-to"><strong>' . esc_html__('To', 'document-center-builder') . '</strong></label><br/>';
-        echo '<input type="date" id="dcb-workflow-date-to" name="workflow_date_to" value="' . esc_attr($date_to) . '" /></span>';
-
-        echo '<span>';
-        submit_button(__('Filter Queue', 'document-center-builder'), 'secondary', '', false);
-        echo '</span>';
+        $table->display();
         echo '</form>';
+        echo '</div>';
+    }
 
-        if (!$query->have_posts()) {
-            echo '<p>' . esc_html__('No submissions in queue.', 'document-center-builder') . '</p></div>';
+    private static function handle_queue_table_bulk_action($table): void {
+        if (!($table instanceof DCB_Workflow_Queue_Table)) {
             return;
         }
 
-        echo '<form id="dcb-queue-bulk" method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
-        wp_nonce_field('dcb_workflow_queue_action', 'dcb_workflow_queue_nonce');
-        echo '<input type="hidden" name="action" value="dcb_workflow_queue_action" />';
-
-        echo '<div style="margin:0 0 10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">';
-        echo '<select name="bulk_to_status">';
-        echo '<option value="">' . esc_html__('Bulk transition…', 'document-center-builder') . '</option>';
-        foreach ($statuses as $status_key => $status_label) {
-            echo '<option value="' . esc_attr($status_key) . '">' . esc_html($status_label) . '</option>';
-        }
-        echo '</select>';
-        echo '<button type="submit" name="queue_action" value="bulk_transition" class="button">' . esc_html__('Apply Status', 'document-center-builder') . '</button>';
-
-        echo '<select name="bulk_assignee_user_id">';
-        echo '<option value="">' . esc_html__('Bulk assign reviewer…', 'document-center-builder') . '</option>';
-        echo '<option value="0">' . esc_html__('Unassigned', 'document-center-builder') . '</option>';
-        foreach ($reviewers as $reviewer) {
-            if (!$reviewer instanceof WP_User) {
-                continue;
-            }
-            echo '<option value="' . esc_attr((string) $reviewer->ID) . '">' . esc_html(self::reviewer_display_label($reviewer, (int) $reviewer->ID)) . '</option>';
-        }
-        echo '</select>';
-        echo '<button type="submit" name="queue_action" value="bulk_assign" class="button">' . esc_html__('Apply Assignee', 'document-center-builder') . '</button>';
-        echo '</div>';
-        echo '</form>';
-
-        echo '<table class="widefat striped"><thead><tr>';
-        echo '<th class="check-column"><input type="checkbox" onclick="jQuery(\'.dcb-queue-select\').prop(\'checked\', this.checked);" /></th>';
-        echo '<th>ID</th><th>Record</th><th>Status</th><th>Assignee</th><th>Role Queue</th><th>Review Thread</th><th>Submitted</th><th>Actions</th>';
-        echo '</tr></thead><tbody>';
-
-        while ($query->have_posts()) {
-            $query->the_post();
-            $submission_id = (int) get_the_ID();
-            $status = self::get_status($submission_id);
-            $assignee_user_id = (int) get_post_meta($submission_id, '_dcb_workflow_assignee_user_id', true);
-            $assignee_user = $assignee_user_id > 0 ? get_user_by('id', $assignee_user_id) : null;
-            $assignee_role = sanitize_key((string) get_post_meta($submission_id, '_dcb_workflow_assignee_role', true));
-            $submitted = (string) get_post_meta($submission_id, '_dcb_form_submitted_at', true);
-            $timeline = self::get_timeline($submission_id);
-            $review_notes = self::timeline_entries_by_event($timeline, array('review_note'), 1);
-            $correction_notes = self::timeline_entries_by_event($timeline, array('correction_request'), 1);
-            $allowed = self::transitions()[$status] ?? array();
-            $is_finalized = $status === 'finalized';
-
-            echo '<tr>';
-            echo '<th class="check-column"><input class="dcb-queue-select" type="checkbox" name="submission_ids[]" value="' . esc_attr((string) $submission_id) . '" form="dcb-queue-bulk" /></th>';
-            echo '<td>' . esc_html((string) $submission_id) . '</td>';
-            echo '<td><a href="' . esc_url(admin_url('post.php?post=' . $submission_id . '&action=edit')) . '">' . esc_html(get_the_title()) . '</a></td>';
-            echo '<td><strong>' . esc_html((string) ($statuses[$status] ?? $status)) . '</strong>';
-            if ($is_finalized) {
-                echo '<div><span class="description">' . esc_html__('Finalized', 'document-center-builder') . '</span></div>';
-            }
-            echo '</td>';
-            echo '<td>' . esc_html(self::reviewer_display_label($assignee_user instanceof WP_User ? $assignee_user : null, $assignee_user_id)) . '</td>';
-            echo '<td>' . esc_html($assignee_role !== '' ? $assignee_role : '—') . '</td>';
-            echo '<td>';
-            if (!empty($correction_notes)) {
-                $latest = $correction_notes[count($correction_notes) - 1];
-                echo '<div><strong>' . esc_html__('Correction:', 'document-center-builder') . '</strong> ' . esc_html(self::timeline_row_message($latest)) . '</div>';
-            }
-            if (!empty($review_notes)) {
-                $latest_note = $review_notes[count($review_notes) - 1];
-                echo '<div><strong>' . esc_html__('Review Note:', 'document-center-builder') . '</strong> ' . esc_html(self::timeline_row_message($latest_note)) . '</div>';
-            }
-            if (empty($review_notes) && empty($correction_notes)) {
-                echo '—';
-            }
-            echo '</td>';
-            echo '<td>' . esc_html($submitted) . '</td>';
-            echo '<td>';
-            echo '<a class="button button-small" href="' . esc_url(admin_url('post.php?post=' . $submission_id . '&action=edit')) . '">' . esc_html__('Open', 'document-center-builder') . '</a> ';
-            echo '<a class="button button-small" href="' . esc_url(DCB_Renderer::submission_print_url($submission_id)) . '">' . esc_html__('Print', 'document-center-builder') . '</a> ';
-            echo '<a class="button button-small" href="' . esc_url(DCB_Renderer::submission_export_url($submission_id)) . '">' . esc_html__('JSON', 'document-center-builder') . '</a> ';
-
-            if (!$is_finalized && !empty($allowed)) {
-                echo '<div style="margin-top:6px;">';
-                echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;">';
-                wp_nonce_field('dcb_workflow_queue_action', 'dcb_workflow_queue_nonce');
-                echo '<input type="hidden" name="action" value="dcb_workflow_queue_action" />';
-                echo '<input type="hidden" name="submission_id" value="' . esc_attr((string) $submission_id) . '" />';
-                echo '<select name="to_status">';
-                foreach ($allowed as $next_status) {
-                    echo '<option value="' . esc_attr($next_status) . '">' . esc_html((string) ($statuses[$next_status] ?? $next_status)) . '</option>';
-                }
-                echo '</select> ';
-                echo '<button type="submit" class="button button-small" name="queue_action" value="quick_transition">' . esc_html__('Set', 'document-center-builder') . '</button>';
-                echo '</form>';
-                echo '</div>';
-            } else {
-                echo '<div style="margin-top:6px;"><span class="description">' . esc_html__('No further transitions.', 'document-center-builder') . '</span></div>';
-            }
-
-            echo '<div style="margin-top:6px;">';
-            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;">';
-            wp_nonce_field('dcb_workflow_queue_action', 'dcb_workflow_queue_nonce');
-            echo '<input type="hidden" name="action" value="dcb_workflow_queue_action" />';
-            echo '<input type="hidden" name="submission_id" value="' . esc_attr((string) $submission_id) . '" />';
-            echo '<select name="assignee_user_id">';
-            echo '<option value="0">' . esc_html__('Unassigned', 'document-center-builder') . '</option>';
-            foreach ($reviewers as $reviewer) {
-                if (!$reviewer instanceof WP_User) {
-                    continue;
-                }
-                echo '<option value="' . esc_attr((string) $reviewer->ID) . '" ' . selected($assignee_user_id, (int) $reviewer->ID, false) . '>' . esc_html(self::reviewer_display_label($reviewer, (int) $reviewer->ID)) . '</option>';
-            }
-            echo '</select> ';
-            echo '<button type="submit" class="button button-small" name="queue_action" value="quick_assign">' . esc_html__('Assign', 'document-center-builder') . '</button>';
-            echo '</form>';
-            echo '</div>';
-            echo '</td>';
-            echo '</tr>';
-        }
-        wp_reset_postdata();
-
-        echo '</tbody></table>';
-
-        if ($query->max_num_pages > 1) {
-            $base = add_query_arg(array('paged' => '%#%'));
-            echo '<div class="tablenav"><div class="tablenav-pages">';
-            echo wp_kses_post((string) paginate_links(array(
-                'base' => $base,
-                'format' => '',
-                'current' => $paged,
-                'total' => (int) $query->max_num_pages,
-                'prev_text' => __('&laquo;', 'document-center-builder'),
-                'next_text' => __('&raquo;', 'document-center-builder'),
-            )));
-            echo '</div></div>';
+        $bulk_action = $table->current_action();
+        $bulk_assign_triggered = !empty($_REQUEST['dcb_bulk_assign_submit']);
+        if ($bulk_action === false && !$bulk_assign_triggered) {
+            return;
         }
 
-        echo '</div>';
+        check_admin_referer('bulk-dcb-review-queue');
+
+        $submission_ids = isset($_REQUEST['submission_ids']) && is_array($_REQUEST['submission_ids'])
+            ? array_values(array_filter(array_map('intval', (array) $_REQUEST['submission_ids']), static function ($id) { return $id > 0; }))
+            : array();
+
+        if (empty($submission_ids)) {
+            $redirect = add_query_arg(array(
+                'page' => 'dcb-review-queue',
+                'queue_notice' => rawurlencode(__('No submissions were selected for bulk action.', 'document-center-builder')),
+                'queue_notice_type' => 'warning',
+            ), admin_url('admin.php'));
+            wp_safe_redirect($redirect);
+            exit;
+        }
+
+        if ($bulk_assign_triggered) {
+            $result = self::execute_queue_action('bulk_assign', $submission_ids, array(
+                'bulk_assignee_user_id' => isset($_REQUEST['bulk_assignee_user_id']) ? (int) $_REQUEST['bulk_assignee_user_id'] : 0,
+                'state_tokens' => isset($_REQUEST['state_tokens']) && is_array($_REQUEST['state_tokens']) ? (array) $_REQUEST['state_tokens'] : array(),
+            ));
+            $redirect = add_query_arg(array(
+                'page' => 'dcb-review-queue',
+                'queue_notice' => rawurlencode((string) ($result['message'] ?? '')),
+                'queue_notice_type' => sanitize_key((string) ($result['type'] ?? 'warning')),
+            ), admin_url('admin.php'));
+            wp_safe_redirect($redirect);
+            exit;
+        }
+
+        $map = array(
+            'bulk_status_in_review' => 'in_review',
+            'bulk_status_needs_correction' => 'needs_correction',
+            'bulk_status_approved' => 'approved',
+            'bulk_status_rejected' => 'rejected',
+            'bulk_status_finalized' => 'finalized',
+        );
+
+        if (!isset($map[$bulk_action])) {
+            return;
+        }
+
+        $result = self::execute_queue_action('bulk_transition', $submission_ids, array(
+            'bulk_to_status' => $map[$bulk_action],
+            'state_tokens' => isset($_REQUEST['state_tokens']) && is_array($_REQUEST['state_tokens']) ? (array) $_REQUEST['state_tokens'] : array(),
+        ));
+        $redirect = add_query_arg(array(
+            'page' => 'dcb-review-queue',
+            'queue_notice' => rawurlencode((string) ($result['message'] ?? '')),
+            'queue_notice_type' => sanitize_key((string) ($result['type'] ?? 'warning')),
+        ), admin_url('admin.php'));
+        wp_safe_redirect($redirect);
+        exit;
     }
 }

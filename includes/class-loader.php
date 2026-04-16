@@ -37,6 +37,7 @@ final class DCB_Loader {
         DCB_Permissions::activate();
         DCB_Settings::activate_defaults();
         DCB_Migrations::activate();
+        DCB_Form_Repository::register_post_type();
         DCB_Submissions::register_post_types();
         flush_rewrite_rules(false);
     }
@@ -44,6 +45,7 @@ final class DCB_Loader {
     public function boot(): void {
         add_action('plugins_loaded', array($this, 'load_textdomain'));
         DCB_Settings::init();
+        DCB_Form_Repository::init();
         DCB_Admin::init();
         DCB_Assets::init();
         DCB_Forms::init();

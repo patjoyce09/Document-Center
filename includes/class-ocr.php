@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 final class DCB_OCR {
     public static function init(): void {
         add_action('wp_ajax_dcb_ocr_smoke_validation', array(__CLASS__, 'smoke_validation_ajax'));
+        add_action('admin_post_dcb_ocr_remote_probe', array(__CLASS__, 'remote_probe_action'));
     }
 
     public static function smoke_validation_ajax(): void {
@@ -34,6 +35,11 @@ final class DCB_OCR {
         $languages = isset($diag['tesseract_languages']) && is_array($diag['tesseract_languages']) ? $diag['tesseract_languages'] : array();
         $checks = isset($diag['checks']) && is_array($diag['checks']) ? $diag['checks'] : array();
         $provider_diag = isset($diag['provider_diagnostics']) && is_array($diag['provider_diagnostics']) ? $diag['provider_diagnostics'] : array();
+        $remote_caps = isset($provider_diag['engines']['remote']) && is_array($provider_diag['engines']['remote']) ? $provider_diag['engines']['remote'] : array();
+        $last_probe = get_option('dcb_ocr_remote_probe_last', array());
+        if (!is_array($last_probe)) {
+            $last_probe = array();
+        }
         $logs = dcb_upload_ocr_debug_log_recent(10);
 
         echo '<div class="wrap">';
@@ -48,7 +54,37 @@ final class DCB_OCR {
         echo '<tr><th>pdftoppm</th><td>' . esc_html((string) ($checks['pdftoppm']['path'] ?? 'Not found')) . '</td></tr>';
         echo '<tr><th>Tesseract Languages</th><td>' . esc_html(implode(', ', $languages)) . '</td></tr>';
         echo '<tr><th>OCR Mode</th><td>' . esc_html((string) ($provider_diag['mode'] ?? 'local')) . ' (active: ' . esc_html((string) ($provider_diag['active'] ?? 'local')) . ')</td></tr>';
+        if (!empty($remote_caps)) {
+            echo '<tr><th>Remote OCR Healthy</th><td>' . esc_html(!empty($remote_caps['remote_healthy']) ? 'yes' : 'no') . '</td></tr>';
+            echo '<tr><th>Remote Contract Version</th><td>' . esc_html((string) ($remote_caps['remote_contract_version'] ?? $remote_caps['contract_version'] ?? '')) . '</td></tr>';
+            echo '<tr><th>Remote Provider Version</th><td>' . esc_html((string) ($remote_caps['provider_version'] ?? '')) . '</td></tr>';
+        }
         echo '</tbody></table>';
+
+        echo '<h2>Remote OCR Probe</h2>';
+        echo '<p>Runs fresh checks against remote <code>/health</code> and <code>/capabilities</code>.</p>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        wp_nonce_field('dcb_ocr_remote_probe', 'dcb_ocr_remote_probe_nonce');
+        echo '<input type="hidden" name="action" value="dcb_ocr_remote_probe" />';
+        submit_button('Run Remote OCR Probe', 'secondary', 'submit', false);
+        echo '</form>';
+
+        if (!empty($last_probe)) {
+            echo '<p><strong>Last probe:</strong> ' . esc_html((string) ($last_probe['timestamp'] ?? '')) . ' — ' . esc_html((string) ($last_probe['status'] ?? 'unknown')) . '</p>';
+            if (!empty($last_probe['diagnostics']) && is_array($last_probe['diagnostics'])) {
+                echo '<ul style="list-style:disc;padding-left:18px;">';
+                foreach ($last_probe['diagnostics'] as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $code = sanitize_key((string) ($row['code'] ?? 'remote_error'));
+                    $endpoint = sanitize_key((string) ($row['endpoint'] ?? 'remote'));
+                    $message = sanitize_text_field((string) ($row['message'] ?? 'Remote OCR issue detected.'));
+                    echo '<li><strong>' . esc_html($code) . '</strong> (' . esc_html($endpoint) . '): ' . esc_html($message) . '</li>';
+                }
+                echo '</ul>';
+            }
+        }
 
         if (!empty($provider_diag['engines']) && is_array($provider_diag['engines'])) {
             echo '<h2>Provider Capabilities</h2><ul style="list-style:disc;padding-left:18px;">';
@@ -61,9 +97,17 @@ final class DCB_OCR {
                 echo '<li><strong>' . esc_html((string) $slug) . '</strong>: ' . esc_html($ready . ' (' . $status_text . ')') . '</li>';
                 if ($slug === 'remote') {
                     $contract = sanitize_text_field((string) ($caps['contract_version'] ?? '')); 
+                    $remote_contract = sanitize_text_field((string) ($caps['remote_contract_version'] ?? ''));
+                    $provider_version = sanitize_text_field((string) ($caps['provider_version'] ?? ''));
                     $auth_header = sanitize_text_field((string) ($caps['auth_header'] ?? '')); 
                     if ($contract !== '') {
                         echo '<li style="margin-left:18px;">Contract: ' . esc_html($contract) . '</li>';
+                    }
+                    if ($remote_contract !== '') {
+                        echo '<li style="margin-left:18px;">Remote Contract: ' . esc_html($remote_contract) . '</li>';
+                    }
+                    if ($provider_version !== '') {
+                        echo '<li style="margin-left:18px;">Provider Version: ' . esc_html($provider_version) . '</li>';
                     }
                     if ($auth_header !== '') {
                         echo '<li style="margin-left:18px;">Auth Header: ' . esc_html($auth_header) . '</li>';
@@ -72,6 +116,38 @@ final class DCB_OCR {
                     $caps_ok = !empty($caps['capabilities']['ok']) ? 'ok' : 'failed';
                     echo '<li style="margin-left:18px;">Health Endpoint: ' . esc_html($health_ok) . '</li>';
                     echo '<li style="margin-left:18px;">Capabilities Endpoint: ' . esc_html($caps_ok) . '</li>';
+                    $cap_body = isset($caps['capabilities']['body']) && is_array($caps['capabilities']['body']) ? $caps['capabilities']['body'] : array();
+                    if (!empty($cap_body)) {
+                        $types = isset($cap_body['supported_file_types']) && is_array($cap_body['supported_file_types']) ? implode(', ', array_map('strval', $cap_body['supported_file_types'])) : '';
+                        $engines = isset($cap_body['ocr_engines_available']) && is_array($cap_body['ocr_engines_available']) ? implode(', ', array_map('strval', $cap_body['ocr_engines_available'])) : '';
+                        $langs = isset($cap_body['languages_available']) && is_array($cap_body['languages_available']) ? implode(', ', array_map('strval', $cap_body['languages_available'])) : '';
+                        if ($types !== '') {
+                            echo '<li style="margin-left:18px;">Supported File Types: ' . esc_html($types) . '</li>';
+                        }
+                        if ($engines !== '') {
+                            echo '<li style="margin-left:18px;">OCR Engines: ' . esc_html($engines) . '</li>';
+                        }
+                        if ($langs !== '') {
+                            echo '<li style="margin-left:18px;">Languages: ' . esc_html($langs) . '</li>';
+                        }
+                        echo '<li style="margin-left:18px;">PDF Text Extraction: ' . esc_html(!empty($cap_body['supports_pdf_text_extraction']) ? 'yes' : 'no') . '</li>';
+                        echo '<li style="margin-left:18px;">Scanned PDF Rasterization: ' . esc_html(!empty($cap_body['supports_scanned_pdf_rasterization']) ? 'yes' : 'no') . '</li>';
+                        echo '<li style="margin-left:18px;">Image OCR: ' . esc_html(!empty($cap_body['supports_image_ocr']) ? 'yes' : 'no') . '</li>';
+                    }
+                    if (!empty($caps['missing_capabilities']) && is_array($caps['missing_capabilities'])) {
+                        echo '<li style="margin-left:18px;">Missing Capabilities: ' . esc_html(implode(', ', array_map('strval', $caps['missing_capabilities']))) . '</li>';
+                    }
+                    if (!empty($caps['diagnostics']) && is_array($caps['diagnostics'])) {
+                        foreach ($caps['diagnostics'] as $diag_row) {
+                            if (!is_array($diag_row)) {
+                                continue;
+                            }
+                            $code = sanitize_key((string) ($diag_row['code'] ?? 'remote_error'));
+                            $endpoint = sanitize_key((string) ($diag_row['endpoint'] ?? 'remote'));
+                            $message = sanitize_text_field((string) ($diag_row['message'] ?? 'Remote OCR issue detected.'));
+                            echo '<li style="margin-left:18px;"><strong>' . esc_html($code) . '</strong> (' . esc_html($endpoint) . '): ' . esc_html($message) . '</li>';
+                        }
+                    }
                 }
             }
             echo '</ul>';
@@ -117,5 +193,32 @@ final class DCB_OCR {
         }
 
         echo '</div>';
+    }
+
+    public static function remote_probe_action(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
+            wp_die('Unauthorized');
+        }
+
+        if (!isset($_POST['dcb_ocr_remote_probe_nonce']) || !wp_verify_nonce((string) $_POST['dcb_ocr_remote_probe_nonce'], 'dcb_ocr_remote_probe')) {
+            wp_die('Security check failed');
+        }
+
+        $diag = class_exists('DCB_OCR_Engine_Manager') ? DCB_OCR_Engine_Manager::diagnostics() : array();
+        $remote = isset($diag['engines']['remote']) && is_array($diag['engines']['remote']) ? $diag['engines']['remote'] : array();
+
+        $row = array(
+            'timestamp' => current_time('mysql'),
+            'status' => !empty($remote['remote_healthy']) ? 'healthy' : 'degraded',
+            'diagnostics' => isset($remote['diagnostics']) && is_array($remote['diagnostics']) ? $remote['diagnostics'] : array(),
+            'contract_version' => sanitize_text_field((string) ($remote['remote_contract_version'] ?? $remote['contract_version'] ?? '')),
+            'provider_version' => sanitize_text_field((string) ($remote['provider_version'] ?? '')),
+            'missing_capabilities' => isset($remote['missing_capabilities']) && is_array($remote['missing_capabilities']) ? $remote['missing_capabilities'] : array(),
+        );
+
+        update_option('dcb_ocr_remote_probe_last', $row, false);
+
+        wp_safe_redirect(add_query_arg(array('page' => 'dcb-ocr-diagnostics', 'probe' => '1'), admin_url('admin.php')));
+        exit;
     }
 }

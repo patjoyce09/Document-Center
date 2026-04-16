@@ -6,6 +6,7 @@ $GLOBALS['dcb_options'] = array();
 $GLOBALS['dcb_post_meta'] = array();
 $GLOBALS['dcb_user_meta'] = array();
 $GLOBALS['dcb_posts'] = array();
+$GLOBALS['dcb_registered_post_types'] = array();
 $GLOBALS['dcb_next_post_id'] = 1000;
 $GLOBALS['dcb_current_user_id'] = 1;
 $GLOBALS['dcb_current_caps'] = array(
@@ -50,12 +51,35 @@ if (!class_exists('WP_Post')) {
         public int $ID;
         public string $post_type;
         public string $post_title;
+        public string $post_status;
+        public string $post_name;
+        public string $post_content;
 
-        public function __construct(int $id = 0, string $post_type = 'post', string $post_title = '') {
+        public function __construct(int $id = 0, string $post_type = 'post', string $post_title = '', string $post_status = 'publish', string $post_name = '', string $post_content = '') {
             $this->ID = $id;
             $this->post_type = $post_type;
             $this->post_title = $post_title;
+            $this->post_status = $post_status;
+            $this->post_name = $post_name;
+            $this->post_content = $post_content;
         }
+    }
+}
+
+if (!class_exists('WP_List_Table')) {
+    class WP_List_Table {
+        protected array $_args = array();
+        protected array $_pagination_args = array();
+        protected array $_column_headers = array();
+        public array $items = array();
+
+        public function __construct(array $args = array()) { $this->_args = $args; }
+        protected function row_actions(array $actions): string { return ''; }
+        public function display(): void {}
+        public function current_action() { return false; }
+        protected function get_items_per_page(string $option, int $default): int { return $default; }
+        protected function get_pagenum(): int { return 1; }
+        protected function set_pagination_args(array $args): void { $this->_pagination_args = $args; }
     }
 }
 
@@ -114,6 +138,9 @@ if (!function_exists('sanitize_textarea_field')) {
 }
 if (!function_exists('sanitize_email')) {
     function sanitize_email($email) { return strtolower(trim((string) $email)); }
+}
+if (!function_exists('sanitize_title')) {
+    function sanitize_title($title) { return trim(strtolower(preg_replace('/[^a-zA-Z0-9_\-]+/', '-', (string) $title)), '-'); }
 }
 if (!function_exists('esc_url_raw')) {
     function esc_url_raw($url) { return trim((string) $url); }
@@ -285,10 +312,78 @@ if (!function_exists('get_post')) {
 }
 if (!function_exists('wp_insert_post')) {
     function wp_insert_post($postarr) {
+        $id = isset($postarr['ID']) ? (int) $postarr['ID'] : 0;
+        if ($id > 0 && isset($GLOBALS['dcb_posts'][$id]) && $GLOBALS['dcb_posts'][$id] instanceof WP_Post) {
+            $post = $GLOBALS['dcb_posts'][$id];
+            $post->post_type = (string) ($postarr['post_type'] ?? $post->post_type);
+            $post->post_title = (string) ($postarr['post_title'] ?? $post->post_title);
+            $post->post_status = (string) ($postarr['post_status'] ?? $post->post_status);
+            $post->post_name = (string) ($postarr['post_name'] ?? $post->post_name);
+            $post->post_content = (string) ($postarr['post_content'] ?? $post->post_content);
+            $GLOBALS['dcb_posts'][$id] = $post;
+            return $id;
+        }
+
         $id = ++$GLOBALS['dcb_next_post_id'];
-        $post = new WP_Post($id, (string) ($postarr['post_type'] ?? 'post'), (string) ($postarr['post_title'] ?? 'Untitled'));
+        $post = new WP_Post(
+            $id,
+            (string) ($postarr['post_type'] ?? 'post'),
+            (string) ($postarr['post_title'] ?? 'Untitled'),
+            (string) ($postarr['post_status'] ?? 'publish'),
+            (string) ($postarr['post_name'] ?? ''),
+            (string) ($postarr['post_content'] ?? '')
+        );
         $GLOBALS['dcb_posts'][$id] = $post;
         return $id;
+    }
+}
+if (!function_exists('wp_delete_post')) {
+    function wp_delete_post($post_id, $force_delete = false) {
+        $post_id = (int) $post_id;
+        unset($GLOBALS['dcb_posts'][$post_id], $GLOBALS['dcb_post_meta'][$post_id]);
+        return true;
+    }
+}
+if (!function_exists('register_post_type')) {
+    function register_post_type($post_type, $args = array()) {
+        $GLOBALS['dcb_registered_post_types'][(string) $post_type] = is_array($args) ? $args : array();
+    }
+}
+if (!function_exists('post_type_exists')) {
+    function post_type_exists($post_type) {
+        return array_key_exists((string) $post_type, $GLOBALS['dcb_registered_post_types']);
+    }
+}
+if (!function_exists('get_posts')) {
+    function get_posts($args = array()) {
+        $post_type = isset($args['post_type']) ? (string) $args['post_type'] : '';
+        $statuses = isset($args['post_status']) ? (array) $args['post_status'] : array('publish');
+        $fields = isset($args['fields']) ? (string) $args['fields'] : '';
+        $limit = isset($args['posts_per_page']) ? (int) $args['posts_per_page'] : 5;
+
+        $rows = array();
+        foreach ((array) $GLOBALS['dcb_posts'] as $post) {
+            if (!$post instanceof WP_Post) {
+                continue;
+            }
+            if ($post_type !== '' && $post->post_type !== $post_type) {
+                continue;
+            }
+            if (!empty($statuses) && !in_array($post->post_status, $statuses, true)) {
+                continue;
+            }
+            $rows[] = $post;
+        }
+
+        if ($limit > 0) {
+            $rows = array_slice($rows, 0, $limit);
+        }
+
+        if ($fields === 'ids') {
+            return array_values(array_map(static function ($post) { return (int) $post->ID; }, $rows));
+        }
+
+        return $rows;
     }
 }
 if (!function_exists('is_user_logged_in')) {
@@ -306,6 +401,20 @@ if (!function_exists('wp_get_current_user')) {
 if (!function_exists('current_user_can')) {
     function current_user_can($cap) { return !empty($GLOBALS['dcb_current_caps'][(string) $cap]); }
 }
+if (!function_exists('user_can')) {
+    function user_can($user, $cap) {
+        if (!$user instanceof WP_User) {
+            return false;
+        }
+        return $user->ID > 0 && !empty($GLOBALS['dcb_current_caps'][(string) $cap]);
+    }
+}
+if (!function_exists('get_the_title')) {
+    function get_the_title($post_id = 0) {
+        $post = get_post((int) $post_id);
+        return $post instanceof WP_Post ? (string) $post->post_title : '';
+    }
+}
 if (!function_exists('get_users')) {
     function get_users($args = array()) {
         return array(new WP_User(11, 'Reviewer One', 'r1@example.com'), new WP_User(12, 'Reviewer Two', 'r2@example.com'));
@@ -315,6 +424,9 @@ if (!function_exists('get_user_by')) {
     function get_user_by($field, $value) {
         $id = (int) $value;
         if ($id < 1) {
+            return null;
+        }
+        if (isset($GLOBALS['dcb_missing_user_ids']) && is_array($GLOBALS['dcb_missing_user_ids']) && in_array($id, $GLOBALS['dcb_missing_user_ids'], true)) {
             return null;
         }
         return new WP_User($id, 'Reviewer ' . $id, 'reviewer' . $id . '@example.com');

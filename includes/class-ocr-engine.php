@@ -69,29 +69,71 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
         $caps = $this->remote_call('capabilities', 'GET', array(), $timeout, $request_id, $auth_header, $api_key);
 
         $warnings = array();
-        $ready = !empty($health['ok']) && !empty($caps['ok']);
+        $diagnostics = array();
+
         if (empty($health['ok'])) {
             $warnings[] = 'Health endpoint unavailable: ' . sanitize_text_field((string) ($health['message'] ?? 'unknown'));
+            $diagnostics[] = $this->diagnostic_row_from_call($health, 'health');
         }
         if (empty($caps['ok'])) {
             $warnings[] = 'Capabilities endpoint unavailable: ' . sanitize_text_field((string) ($caps['message'] ?? 'unknown'));
+            $diagnostics[] = $this->diagnostic_row_from_call($caps, 'capabilities');
         }
+
+        $health_body = isset($health['body']) && is_array($health['body']) ? $health['body'] : array();
+        $caps_body = isset($caps['body']) && is_array($caps['body']) ? $caps['body'] : array();
+
+        $health_contract = sanitize_text_field((string) ($health_body['contract_version'] ?? ''));
+        $caps_contract = sanitize_text_field((string) ($caps_body['contract_version'] ?? ''));
+        $remote_contract = $caps_contract !== '' ? $caps_contract : $health_contract;
+
+        $contract_ok = ($remote_contract === '' || $remote_contract === self::CONTRACT_VERSION);
+        if (!$contract_ok) {
+            $warnings[] = 'Remote OCR contract version mismatch.';
+            $diagnostics[] = array(
+                'code' => 'schema_mismatch',
+                'endpoint' => 'contract',
+                'message' => 'Expected contract ' . self::CONTRACT_VERSION . ' but got ' . $remote_contract,
+            );
+        }
+
+        $provider_version = sanitize_text_field((string) ($health_body['version'] ?? $health_body['provider_version'] ?? ''));
+        $provider_name = sanitize_text_field((string) ($health_body['service'] ?? $health_body['provider'] ?? ''));
+
+        $missing_capabilities = $this->missing_capabilities($caps_body);
+        if (!empty($missing_capabilities)) {
+            $warnings[] = 'Remote OCR capabilities are missing required features.';
+            $diagnostics[] = array(
+                'code' => 'missing_capability',
+                'endpoint' => 'capabilities',
+                'message' => 'Missing: ' . implode(', ', $missing_capabilities),
+            );
+        }
+
+        $calls_ok = !empty($health['ok']) && !empty($caps['ok']);
+        $ready = $calls_ok && $contract_ok && empty($missing_capabilities);
 
         return array(
             'ready' => $ready,
+            'remote_healthy' => $ready,
             'status' => $ready ? 'ready' : 'degraded',
             'warnings' => $warnings,
+            'diagnostics' => $diagnostics,
             'contract_version' => self::CONTRACT_VERSION,
+            'remote_contract_version' => $remote_contract,
+            'provider' => $provider_name,
+            'provider_version' => $provider_version,
             'auth_header' => $auth_header,
+            'missing_capabilities' => $missing_capabilities,
             'health' => array(
                 'ok' => !empty($health['ok']),
                 'http_status' => (int) ($health['status_code'] ?? 0),
-                'body' => isset($health['body']) && is_array($health['body']) ? $health['body'] : array(),
+                'body' => $health_body,
             ),
             'capabilities' => array(
                 'ok' => !empty($caps['ok']),
                 'http_status' => (int) ($caps['status_code'] ?? 0),
-                'body' => isset($caps['body']) && is_array($caps['body']) ? $caps['body'] : array(),
+                'body' => $caps_body,
             ),
         );
     }
@@ -134,16 +176,22 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
 
         $extract = $this->remote_call('extract', 'POST', $body, $timeout, $request_id, $auth_header, $api_key);
         if (empty($extract['ok'])) {
+            $mapped_reason = $this->map_remote_failure_reason((string) ($extract['error_code'] ?? 'remote_request_failed'));
             return $this->error_result(
-                sanitize_key((string) ($extract['error_code'] ?? 'remote_request_failed')),
+                $mapped_reason,
                 sanitize_text_field((string) ($extract['message'] ?? 'Remote OCR request failed.')),
                 $request_id,
-                (int) ($extract['status_code'] ?? 0)
+                (int) ($extract['status_code'] ?? 0),
+                array(
+                    'request_url' => esc_url_raw((string) ($extract['url'] ?? '')),
+                )
             );
         }
 
         $decoded = isset($extract['body']) && is_array($extract['body']) ? $extract['body'] : array();
-        $shape = $this->validate_extract_response_shape($decoded);
+        $normalized = $this->normalize_extract_payload($decoded, $request_id);
+
+        $shape = $this->validate_extract_response_shape($normalized);
         if (empty($shape['ok'])) {
             return $this->error_result(
                 'remote_contract_invalid_shape',
@@ -153,29 +201,48 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
             );
         }
 
-        $result = isset($decoded['result']) && is_array($decoded['result']) ? $decoded['result'] : $decoded;
-        $text = trim((string) ($result['text'] ?? ''));
-        $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
-        $warnings = isset($result['warnings']) && is_array($result['warnings']) ? $result['warnings'] : array();
-        $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
-        if ($failure_reason === '' && $text === '') {
-            $failure_reason = 'empty_extraction';
+        $response_contract = sanitize_text_field((string) ($normalized['contract_version'] ?? self::CONTRACT_VERSION));
+        if ($response_contract !== '' && $response_contract !== self::CONTRACT_VERSION) {
+            return $this->error_result(
+                'remote_contract_version_mismatch',
+                'Remote OCR contract version mismatch.',
+                $request_id,
+                (int) ($extract['status_code'] ?? 0)
+            );
         }
 
-        $provider = isset($decoded['provider']) && is_array($decoded['provider']) ? $decoded['provider'] : array();
-        $provider_name = sanitize_text_field((string) ($provider['name'] ?? 'remote'));
-        $provider_version = sanitize_text_field((string) ($provider['version'] ?? ''));
-        $response_request_id = sanitize_text_field((string) ($decoded['request_id'] ?? $request_id));
-        $response_contract = sanitize_text_field((string) ($decoded['contract_version'] ?? self::CONTRACT_VERSION));
+        $text = trim((string) ($normalized['text'] ?? ''));
+        $pages = $this->sanitize_pages(isset($normalized['pages']) && is_array($normalized['pages']) ? $normalized['pages'] : array());
+        $warnings = $this->sanitize_warnings(isset($normalized['warnings']) && is_array($normalized['warnings']) ? $normalized['warnings'] : array());
+        $failure_reason = sanitize_key((string) ($normalized['failure_reason'] ?? ''));
+        if ($failure_reason === '' && $text === '') {
+            $failure_reason = 'empty_extraction';
+            $warnings[] = array('code' => 'remote_empty_text', 'message' => 'Remote OCR returned an empty text response.');
+        }
+
+        if ($failure_reason !== '' && $failure_reason !== 'empty_extraction') {
+            $warnings[] = array('code' => 'remote_service_failure', 'message' => 'Remote service declared failure_reason: ' . $failure_reason);
+        }
+
+        $provider_name = sanitize_text_field((string) ($normalized['provider'] ?? 'remote'));
+        $provider_version = sanitize_text_field((string) ($normalized['provider_version'] ?? ''));
+        $response_request_id = sanitize_text_field((string) ($normalized['request_id'] ?? $request_id));
+        $engine_used = sanitize_text_field((string) ($normalized['engine_used'] ?? 'remote-api'));
+        $confidence = $this->resolve_confidence($normalized, $pages, $text);
+        $timings = $this->sanitize_timings(isset($normalized['timings']) && is_array($normalized['timings']) ? $normalized['timings'] : array());
 
         return array(
             'text' => $text,
             'normalized' => dcb_upload_normalize_text($text),
-            'engine' => sanitize_text_field((string) ($result['engine'] ?? 'remote-api')),
+            'engine' => $engine_used,
+            'engine_used' => $engine_used,
             'pages' => $pages,
             'warnings' => $warnings,
             'failure_reason' => $failure_reason,
-            'provider' => 'remote',
+            'provider' => $provider_name !== '' ? $provider_name : 'remote',
+            'confidence' => $confidence,
+            'confidence_proxy' => $confidence,
+            'timings' => $timings,
             'provenance' => array(
                 'mode' => 'remote',
                 'provider' => $provider_name !== '' ? $provider_name : 'remote',
@@ -185,33 +252,173 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
                 'request_url' => esc_url_raw((string) ($extract['url'] ?? '')),
                 'http_status' => (int) ($extract['status_code'] ?? 0),
                 'contract_version' => $response_contract,
+                'engine_used' => $engine_used,
+                'warnings' => $warnings,
+                'failure_reason' => $failure_reason,
+                'confidence' => $confidence,
+                'timings' => $timings,
             ),
         );
     }
 
     private function validate_extract_response_shape(array $decoded): array {
-        if (isset($decoded['result'])) {
-            if (!is_array($decoded['result'])) {
-                return array('ok' => false, 'message' => 'Result payload is not an object.');
-            }
-            $result = $decoded['result'];
-            if (isset($result['warnings']) && !is_array($result['warnings'])) {
-                return array('ok' => false, 'message' => 'Result warnings must be an array.');
-            }
-            if (isset($result['pages']) && !is_array($result['pages'])) {
-                return array('ok' => false, 'message' => 'Result pages must be an array.');
-            }
-            return array('ok' => true);
+        if (!isset($decoded['request_id']) || trim((string) $decoded['request_id']) === '') {
+            return array('ok' => false, 'message' => 'request_id is required.');
         }
-
+        if (!isset($decoded['provider']) || trim((string) $decoded['provider']) === '') {
+            return array('ok' => false, 'message' => 'provider is required.');
+        }
+        if (!isset($decoded['provider_version']) || trim((string) $decoded['provider_version']) === '') {
+            return array('ok' => false, 'message' => 'provider_version is required.');
+        }
+        if (!isset($decoded['contract_version']) || trim((string) $decoded['contract_version']) === '') {
+            return array('ok' => false, 'message' => 'contract_version is required.');
+        }
+        if (!array_key_exists('text', $decoded) || !is_string($decoded['text'])) {
+            return array('ok' => false, 'message' => 'text must be a string.');
+        }
         if (isset($decoded['warnings']) && !is_array($decoded['warnings'])) {
-            return array('ok' => false, 'message' => 'Warnings must be an array.');
+            return array('ok' => false, 'message' => 'warnings must be an array.');
         }
         if (isset($decoded['pages']) && !is_array($decoded['pages'])) {
-            return array('ok' => false, 'message' => 'Pages must be an array.');
+            return array('ok' => false, 'message' => 'pages must be an array.');
+        }
+        if (isset($decoded['timings']) && !is_array($decoded['timings'])) {
+            return array('ok' => false, 'message' => 'timings must be an object.');
+        }
+        return array('ok' => true);
+    }
+
+    private function normalize_extract_payload(array $decoded, string $request_id): array {
+        if (isset($decoded['result']) && is_array($decoded['result'])) {
+            $provider = isset($decoded['provider']) && is_array($decoded['provider']) ? $decoded['provider'] : array();
+            $result = $decoded['result'];
+
+            return array(
+                'request_id' => sanitize_text_field((string) ($decoded['request_id'] ?? $request_id)),
+                'provider' => sanitize_text_field((string) ($provider['name'] ?? '')),
+                'provider_version' => sanitize_text_field((string) ($provider['version'] ?? '')),
+                'contract_version' => sanitize_text_field((string) ($decoded['contract_version'] ?? '')),
+                'engine_used' => sanitize_text_field((string) ($result['engine_used'] ?? $result['engine'] ?? 'remote-api')),
+                'text' => (string) ($result['text'] ?? ''),
+                'normalized_text' => (string) ($result['normalized_text'] ?? ''),
+                'pages' => isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array(),
+                'warnings' => isset($result['warnings']) && is_array($result['warnings']) ? $result['warnings'] : array(),
+                'failure_reason' => sanitize_key((string) ($result['failure_reason'] ?? '')),
+                'confidence' => isset($result['confidence']) && is_numeric($result['confidence']) ? (float) $result['confidence'] : null,
+                'timings' => isset($result['timings']) && is_array($result['timings']) ? $result['timings'] : array(),
+            );
         }
 
-        return array('ok' => true);
+        return array(
+            'request_id' => sanitize_text_field((string) ($decoded['request_id'] ?? $request_id)),
+            'provider' => sanitize_text_field((string) ($decoded['provider'] ?? '')),
+            'provider_version' => sanitize_text_field((string) ($decoded['provider_version'] ?? '')),
+            'contract_version' => sanitize_text_field((string) ($decoded['contract_version'] ?? '')),
+            'engine_used' => sanitize_text_field((string) ($decoded['engine_used'] ?? 'remote-api')),
+            'text' => (string) ($decoded['text'] ?? ''),
+            'normalized_text' => (string) ($decoded['normalized_text'] ?? ''),
+            'pages' => isset($decoded['pages']) && is_array($decoded['pages']) ? $decoded['pages'] : array(),
+            'warnings' => isset($decoded['warnings']) && is_array($decoded['warnings']) ? $decoded['warnings'] : array(),
+            'failure_reason' => sanitize_key((string) ($decoded['failure_reason'] ?? '')),
+            'confidence' => isset($decoded['confidence']) && is_numeric($decoded['confidence']) ? (float) $decoded['confidence'] : null,
+            'timings' => isset($decoded['timings']) && is_array($decoded['timings']) ? $decoded['timings'] : array(),
+        );
+    }
+
+    private function sanitize_pages(array $pages): array {
+        $clean = array();
+        foreach ($pages as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+
+            $page_text = isset($page['extracted_text']) ? (string) $page['extracted_text'] : (string) ($page['text'] ?? '');
+            $confidence = isset($page['confidence_proxy']) && is_numeric($page['confidence_proxy']) ? (float) $page['confidence_proxy'] : $this->text_confidence_proxy($page_text);
+
+            $clean[] = array(
+                'page_number' => max(1, (int) ($page['page_number'] ?? 1)),
+                'engine' => sanitize_text_field((string) ($page['engine'] ?? 'remote-api')),
+                'text' => $page_text,
+                'text_length' => max(0, (int) ($page['text_length'] ?? strlen($page_text))),
+                'confidence_proxy' => round(max(0.0, min(1.0, $confidence)), 4),
+                'warnings' => $this->sanitize_warnings(isset($page['warnings']) && is_array($page['warnings']) ? $page['warnings'] : array()),
+            );
+        }
+        return $clean;
+    }
+
+    private function sanitize_warnings(array $warnings): array {
+        $clean = array();
+        foreach ($warnings as $warning) {
+            if (is_array($warning)) {
+                $clean[] = array(
+                    'code' => sanitize_key((string) ($warning['code'] ?? 'remote_warning')),
+                    'message' => sanitize_text_field((string) ($warning['message'] ?? 'Remote OCR warning')),
+                );
+                continue;
+            }
+
+            $msg = sanitize_text_field((string) $warning);
+            if ($msg !== '') {
+                $clean[] = array('code' => 'remote_warning', 'message' => $msg);
+            }
+        }
+        return $clean;
+    }
+
+    private function sanitize_timings(array $timings): array {
+        return array(
+            'total_ms' => max(0, (int) ($timings['total_ms'] ?? 0)),
+            'validation_ms' => max(0, (int) ($timings['validation_ms'] ?? 0)),
+            'extraction_ms' => max(0, (int) ($timings['extraction_ms'] ?? 0)),
+            'normalization_ms' => max(0, (int) ($timings['normalization_ms'] ?? 0)),
+        );
+    }
+
+    private function resolve_confidence(array $normalized, array $pages, string $text): float {
+        if (isset($normalized['confidence']) && is_numeric($normalized['confidence'])) {
+            return round(max(0.0, min(1.0, (float) $normalized['confidence'])), 4);
+        }
+
+        if (!empty($pages)) {
+            $total = 0.0;
+            $count = 0;
+            foreach ($pages as $page) {
+                if (!is_array($page)) {
+                    continue;
+                }
+                $total += (float) ($page['confidence_proxy'] ?? 0.0);
+                $count++;
+            }
+            if ($count > 0) {
+                return round(max(0.0, min(1.0, $total / $count)), 4);
+            }
+        }
+
+        return round(max(0.0, min(1.0, $this->text_confidence_proxy($text))), 4);
+    }
+
+    private function text_confidence_proxy(string $text): float {
+        if (function_exists('dcb_text_confidence_proxy')) {
+            return (float) dcb_text_confidence_proxy($text);
+        }
+
+        $text = trim($text);
+        if ($text === '') {
+            return 0.0;
+        }
+        $len = strlen($text);
+        if ($len < 20) {
+            return 0.25;
+        }
+        if ($len < 80) {
+            return 0.5;
+        }
+        if ($len < 220) {
+            return 0.72;
+        }
+        return 0.9;
     }
 
     private function auth_header_name(): string {
@@ -249,10 +456,14 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
 
         $response = wp_remote_request($url, $args);
         if (is_wp_error($response)) {
+            $message = sanitize_text_field((string) $response->get_error_message());
+            $error_code = method_exists($response, 'get_error_code') ? sanitize_key((string) $response->get_error_code()) : '';
+
+            $is_timeout = stripos($message, 'timed out') !== false || stripos($message, 'timeout') !== false || $error_code === 'timeout';
             return array(
                 'ok' => false,
-                'error_code' => 'remote_request_failed',
-                'message' => $response->get_error_message(),
+                'error_code' => $is_timeout ? 'remote_timeout' : 'remote_network_failed',
+                'message' => $message !== '' ? $message : 'Remote request failed.',
                 'url' => $url,
             );
         }
@@ -276,6 +487,19 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
         }
 
         if ($status_code < 200 || $status_code >= 300) {
+            $service_failure = sanitize_key((string) ($decoded['failure_reason'] ?? ''));
+            if ($service_failure !== '') {
+                return array(
+                    'ok' => false,
+                    'error_code' => 'remote_service_failure',
+                    'service_failure_reason' => $service_failure,
+                    'message' => sanitize_text_field((string) ($decoded['message'] ?? ('Remote OCR service failure: ' . $service_failure))),
+                    'status_code' => $status_code,
+                    'body' => $decoded,
+                    'url' => $url,
+                );
+            }
+
             return array(
                 'ok' => false,
                 'error_code' => 'remote_http_error',
@@ -294,24 +518,123 @@ final class DCB_OCR_Engine_Remote implements DCB_OCR_Engine {
         );
     }
 
-    private function error_result(string $code, string $message, string $request_id, int $http_status = 0): array {
+    private function error_result(string $code, string $message, string $request_id, int $http_status = 0, array $extra = array()): array {
+        $warnings = array(array('code' => sanitize_key($code), 'message' => sanitize_text_field($message)));
+
+        $provenance = array(
+            'mode' => 'remote',
+            'provider' => sanitize_text_field((string) ($extra['provider'] ?? 'remote')),
+            'provider_version' => sanitize_text_field((string) ($extra['provider_version'] ?? '')),
+            'timestamp' => current_time('mysql'),
+            'request_id' => $request_id,
+            'http_status' => $http_status,
+            'request_url' => esc_url_raw((string) ($extra['request_url'] ?? '')),
+            'contract_version' => sanitize_text_field((string) ($extra['contract_version'] ?? self::CONTRACT_VERSION)),
+            'engine_used' => sanitize_text_field((string) ($extra['engine_used'] ?? 'remote')),
+            'warnings' => $warnings,
+            'failure_reason' => sanitize_key($code),
+            'confidence' => 0.0,
+            'timings' => array('total_ms' => 0, 'validation_ms' => 0, 'extraction_ms' => 0, 'normalization_ms' => 0),
+        );
+
         return array(
             'text' => '',
             'normalized' => '',
             'engine' => 'remote',
+            'engine_used' => 'remote',
             'pages' => array(),
-            'warnings' => array(array('code' => sanitize_key($code), 'message' => sanitize_text_field($message))),
+            'warnings' => $warnings,
             'failure_reason' => sanitize_key($code),
+            'confidence' => 0.0,
+            'confidence_proxy' => 0.0,
+            'timings' => array('total_ms' => 0, 'validation_ms' => 0, 'extraction_ms' => 0, 'normalization_ms' => 0),
             'provider' => 'remote',
-            'provenance' => array(
-                'mode' => 'remote',
-                'provider' => 'remote',
-                'timestamp' => current_time('mysql'),
-                'request_id' => $request_id,
-                'http_status' => $http_status,
-                'contract_version' => self::CONTRACT_VERSION,
-            ),
+            'provenance' => $provenance,
         );
+    }
+
+    private function map_remote_failure_reason(string $error_code): string {
+        $error_code = sanitize_key($error_code);
+        if ($error_code === 'remote_auth_failed') {
+            return 'remote_auth_failed';
+        }
+        if ($error_code === 'remote_timeout') {
+            return 'remote_timeout';
+        }
+        if ($error_code === 'remote_network_failed') {
+            return 'remote_network_failed';
+        }
+        if ($error_code === 'remote_service_failure') {
+            return 'remote_service_failure';
+        }
+        if ($error_code === 'remote_http_error') {
+            return 'remote_http_error';
+        }
+        return 'remote_request_failed';
+    }
+
+    private function map_diagnostic_code(string $error_code): string {
+        $error_code = sanitize_key($error_code);
+        if ($error_code === 'remote_auth_failed') {
+            return 'bad_api_key';
+        }
+        if ($error_code === 'remote_timeout') {
+            return 'timeout';
+        }
+        if ($error_code === 'remote_network_failed') {
+            return 'network_failure';
+        }
+        if ($error_code === 'remote_contract_invalid_shape' || $error_code === 'remote_contract_version_mismatch') {
+            return 'schema_mismatch';
+        }
+        if ($error_code === 'remote_service_failure') {
+            return 'service_declared_failure';
+        }
+        if ($error_code === 'remote_http_error') {
+            return 'remote_http_error';
+        }
+        return 'remote_error';
+    }
+
+    private function diagnostic_row_from_call(array $call, string $endpoint): array {
+        $error_code = sanitize_key((string) ($call['error_code'] ?? 'remote_error'));
+        return array(
+            'code' => $this->map_diagnostic_code($error_code),
+            'endpoint' => sanitize_key($endpoint),
+            'message' => sanitize_text_field((string) ($call['message'] ?? 'Remote endpoint unavailable.')),
+        );
+    }
+
+    private function missing_capabilities(array $caps_body): array {
+        if (empty($caps_body)) {
+            return array('capabilities_payload_missing');
+        }
+
+        $required_flags = array(
+            'supports_pdf_text_extraction',
+            'supports_scanned_pdf_rasterization',
+            'supports_image_ocr',
+        );
+
+        $missing = array();
+        foreach ($required_flags as $flag) {
+            if (!array_key_exists($flag, $caps_body)) {
+                $missing[] = $flag;
+            }
+        }
+
+        if (!empty($caps_body['supported_file_types']) && is_array($caps_body['supported_file_types'])) {
+            $types = array_map('strtolower', array_map('strval', $caps_body['supported_file_types']));
+            foreach (array('application/pdf', 'image/jpeg', 'image/png', 'image/webp') as $required_type) {
+                if (!in_array($required_type, $types, true)) {
+                    $missing[] = 'file_type:' . $required_type;
+                }
+            }
+        } else {
+            $missing[] = 'supported_file_types';
+        }
+
+        return array_values(array_unique($missing));
     }
 }
 
@@ -349,9 +672,13 @@ final class DCB_OCR_Engine_Manager {
         $engine = self::active_engine();
         $result = $engine->extract($file_path, $mime);
 
-        if ($mode === 'auto' && $engine->slug() === 'remote' && trim((string) ($result['text'] ?? '')) === '') {
+        $remote_empty = trim((string) ($result['text'] ?? '')) === '';
+        $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
+        if ($mode === 'auto' && $engine->slug() === 'remote' && ($remote_empty || $failure_reason === 'empty_extraction')) {
             $fallback = (new DCB_OCR_Engine_Local())->extract($file_path, $mime);
             $fallback['warnings'][] = array('code' => 'auto_fallback_to_local', 'message' => 'Remote OCR returned empty result. Fell back to local OCR.');
+            $fallback['provenance']['fallback_from'] = 'remote';
+            $fallback['provenance']['fallback_reason'] = $failure_reason !== '' ? $failure_reason : 'empty_extraction';
             return $fallback;
         }
 

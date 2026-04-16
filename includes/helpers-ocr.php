@@ -811,12 +811,45 @@ function dcb_upload_extract_text_from_file_local(string $file_path, string $mime
 function dcb_upload_extract_text_from_file(string $file_path, string $mime): array {
     if (class_exists('DCB_OCR_Engine_Manager')) {
         $result = DCB_OCR_Engine_Manager::extract($file_path, $mime);
+        $result = dcb_ocr_attach_legacy_meta($result);
         dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
         return $result;
     }
 
     $result = dcb_upload_extract_text_from_file_local($file_path, $mime);
+    $result = dcb_ocr_attach_legacy_meta($result);
     dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
+    return $result;
+}
+
+function dcb_ocr_attach_legacy_meta(array $result): array {
+    $warnings = isset($result['warnings']) && is_array($result['warnings']) ? $result['warnings'] : array();
+    $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
+    $provenance = isset($result['provenance']) && is_array($result['provenance']) ? $result['provenance'] : array();
+
+    $confidence = 0.0;
+    if (isset($result['confidence']) && is_numeric($result['confidence'])) {
+        $confidence = (float) $result['confidence'];
+    } elseif (isset($result['confidence_proxy']) && is_numeric($result['confidence_proxy'])) {
+        $confidence = (float) $result['confidence_proxy'];
+    }
+
+    $timings = isset($result['timings']) && is_array($result['timings']) ? $result['timings'] : array();
+
+    $result['ocr'] = array(
+        'engine' => sanitize_text_field((string) ($result['engine_used'] ?? $result['engine'] ?? 'unknown')),
+        'confidence_proxy' => round(max(0.0, min(1.0, $confidence)), 4),
+        'failure_reason' => sanitize_key((string) ($result['failure_reason'] ?? '')),
+        'warnings' => $warnings,
+        'pages' => $pages,
+        'provider' => sanitize_text_field((string) ($provenance['provider'] ?? $result['provider'] ?? 'local')),
+        'provider_version' => sanitize_text_field((string) ($provenance['provider_version'] ?? '')),
+        'contract_version' => sanitize_text_field((string) ($provenance['contract_version'] ?? '')),
+        'request_id' => sanitize_text_field((string) ($provenance['request_id'] ?? '')),
+        'engine_used' => sanitize_text_field((string) ($provenance['engine_used'] ?? $result['engine_used'] ?? $result['engine'] ?? 'unknown')),
+        'timings' => $timings,
+    );
+
     return $result;
 }
 
@@ -865,7 +898,19 @@ function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, arra
     update_post_meta((int) $post_id, '_dcb_ocr_review_threshold', $threshold);
     update_post_meta((int) $post_id, '_dcb_ocr_review_failure_reason', $failure_reason !== '' ? $failure_reason : 'low_confidence');
     update_post_meta((int) $post_id, '_dcb_ocr_review_provider', sanitize_key((string) ($result['provider'] ?? 'local')));
-    update_post_meta((int) $post_id, '_dcb_ocr_review_provenance', wp_json_encode((array) ($result['provenance'] ?? array())));
+    $provenance = (array) ($result['provenance'] ?? array());
+    update_post_meta((int) $post_id, '_dcb_ocr_review_provenance', wp_json_encode($provenance));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_request_id', sanitize_text_field((string) ($provenance['request_id'] ?? '')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_provider_version', sanitize_text_field((string) ($provenance['provider_version'] ?? '')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_contract_version', sanitize_text_field((string) ($provenance['contract_version'] ?? '')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_engine_used', sanitize_text_field((string) ($provenance['engine_used'] ?? ($result['engine_used'] ?? $result['engine'] ?? ''))));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_warnings', wp_json_encode((array) ($provenance['warnings'] ?? ($result['warnings'] ?? array()))));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_timings', wp_json_encode((array) ($provenance['timings'] ?? ($result['timings'] ?? array()))));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_mode', sanitize_key((string) ($provenance['mode'] ?? 'local')));
+    $stored_confidence = isset($provenance['confidence']) && is_numeric($provenance['confidence'])
+        ? (float) $provenance['confidence']
+        : (isset($result['confidence']) && is_numeric($result['confidence']) ? (float) $result['confidence'] : $confidence);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_confidence_remote', round(max(0.0, min(1.0, $stored_confidence)), 4));
 }
 
 function dcb_upload_stage_line_block_normalization(array $pages): array {

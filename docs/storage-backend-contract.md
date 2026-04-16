@@ -22,8 +22,8 @@ For each storage mode (`option`, `cpt`, `table`), backend adapters must support:
 ## Current implementation details (this pass)
 
 - Canonical legacy backend: `dcb_forms_custom` option.
-- Shadow backend for `cpt`: `dcb_forms_custom_cpt_shadow` option.
-- Shadow backend for `table`: `dcb_forms_custom_table_shadow` option.
+- Real CPT backend: `dcb_form_definition` posts with payload/meta-backed storage.
+- Table mode remains a shadow option backend (`dcb_forms_custom_table_shadow`) in this pass.
 - Dual read toggle: `dcb_forms_storage_dual_read`.
 - Dual write toggle: `dcb_forms_storage_dual_write`.
 
