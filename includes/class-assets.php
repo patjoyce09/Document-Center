@@ -48,7 +48,14 @@ final class DCB_Assets {
         }
 
         global $post;
-        if (!$post instanceof WP_Post || strpos((string) $post->post_content, '[dcb_digital_forms_portal]') === false) {
+        if (!$post instanceof WP_Post) {
+            return;
+        }
+
+        $content = (string) $post->post_content;
+        $has_primary = strpos($content, '[dcb_digital_forms_portal]') !== false;
+        $has_legacy = strpos($content, '[document_digital_forms_portal]') !== false;
+        if (!$has_primary && !$has_legacy) {
             return;
         }
 
@@ -82,7 +89,14 @@ final class DCB_Assets {
         }
 
         global $post;
-        if (!$post instanceof WP_Post || strpos((string) $post->post_content, '[dcb_upload_portal]') === false) {
+        if (!$post instanceof WP_Post) {
+            return;
+        }
+
+        $content = (string) $post->post_content;
+        $has_primary = strpos($content, '[dcb_upload_portal]') !== false;
+        $has_legacy = strpos($content, '[document_upload_portal]') !== false;
+        if (!$has_primary && !$has_legacy) {
             return;
         }
 

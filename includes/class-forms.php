@@ -8,6 +8,8 @@ final class DCB_Forms {
     public static function init(): void {
         add_shortcode('dcb_digital_forms_portal', array(__CLASS__, 'digital_forms_shortcode'));
         add_shortcode('dcb_upload_portal', array(__CLASS__, 'upload_shortcode'));
+        add_shortcode('document_upload_portal', array(__CLASS__, 'upload_shortcode'));
+        add_shortcode('document_digital_forms_portal', array(__CLASS__, 'digital_forms_shortcode'));
     }
 
     public static function digital_forms_shortcode(): string {
