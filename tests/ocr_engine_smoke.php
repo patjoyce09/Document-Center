@@ -44,7 +44,7 @@ if (!function_exists('dcb_upload_extract_text_from_file_local')) {
     function dcb_upload_extract_text_from_file_local($path, $mime) { return array('text' => '', 'pages' => array(), 'warnings' => array()); }
 }
 if (!function_exists('dcb_ocr_collect_environment_diagnostics')) {
-    function dcb_ocr_collect_environment_diagnostics() { return array('status' => 'missing', 'warnings' => array('missing')); }
+    function dcb_ocr_collect_environment_diagnostics($include_provider_diagnostics = true) { return array('status' => 'missing', 'warnings' => array('missing')); }
 }
 if (!function_exists('get_option')) {
     function get_option($key, $default = '') {

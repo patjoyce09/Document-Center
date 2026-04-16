@@ -10,7 +10,7 @@ final class DCB_Diagnostics {
     }
 
     public static function render_settings_page(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS)) {
             wp_die('Unauthorized');
         }
 
@@ -90,7 +90,7 @@ final class DCB_Diagnostics {
     }
 
     public static function save_settings(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS)) {
             wp_die('Unauthorized');
         }
 

@@ -10,7 +10,7 @@ final class DCB_Builder {
     }
 
     public static function render_page(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_FORMS)) {
             wp_die('Unauthorized');
         }
 
@@ -82,7 +82,7 @@ final class DCB_Builder {
     }
 
     public static function save_builder(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_FORMS)) {
             wp_die('Unauthorized');
         }
         if (!isset($_POST['dcb_builder_nonce']) || !wp_verify_nonce((string) $_POST['dcb_builder_nonce'], 'dcb_save_builder')) {

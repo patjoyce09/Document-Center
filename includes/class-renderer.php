@@ -12,7 +12,7 @@ final class DCB_Renderer {
     }
 
     private static function guard(string $action, int $submission_id): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_REVIEW_SUBMISSIONS)) {
             wp_die('Unauthorized');
         }
         check_admin_referer($action . '_' . $submission_id);

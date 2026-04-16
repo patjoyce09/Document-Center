@@ -10,7 +10,7 @@ final class DCB_OCR {
     }
 
     public static function smoke_validation_ajax(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
             wp_send_json_error(array('message' => 'Unauthorized'), 403);
         }
 
@@ -25,7 +25,7 @@ final class DCB_OCR {
     }
 
     public static function render_diagnostics_page(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
             wp_die('Unauthorized');
         }
 

@@ -27,7 +27,8 @@ final class DCB_Submissions {
             'show_in_menu' => false,
             'supports' => array('title'),
             'menu_icon' => 'dashicons-feedback',
-            'capability_type' => 'post',
+            'capability_type' => array('dcb_submission', 'dcb_submissions'),
+            'capabilities' => self::submission_post_type_capabilities(),
             'map_meta_cap' => true,
         ));
 
@@ -40,6 +41,9 @@ final class DCB_Submissions {
             'show_ui' => true,
             'show_in_menu' => false,
             'supports' => array('title'),
+            'capability_type' => array('dcb_upload_log', 'dcb_upload_logs'),
+            'capabilities' => self::upload_log_post_type_capabilities(),
+            'map_meta_cap' => true,
         ));
 
         register_post_type('dcb_ocr_review_queue', array(
@@ -51,7 +55,67 @@ final class DCB_Submissions {
             'show_ui' => true,
             'show_in_menu' => false,
             'supports' => array('title'),
+            'capability_type' => array('dcb_ocr_review_item', 'dcb_ocr_review_items'),
+            'capabilities' => self::ocr_review_post_type_capabilities(),
+            'map_meta_cap' => true,
         ));
+    }
+
+    private static function submission_post_type_capabilities(): array {
+        return array(
+            'edit_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'read_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_others_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'publish_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'read_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_published_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_others_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_published_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'create_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+        );
+    }
+
+    private static function upload_log_post_type_capabilities(): array {
+        return array(
+            'edit_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'read_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_post' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_others_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'publish_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'read_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_published_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'delete_others_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_private_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'edit_published_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+            'create_posts' => DCB_Permissions::CAP_REVIEW_SUBMISSIONS,
+        );
+    }
+
+    private static function ocr_review_post_type_capabilities(): array {
+        return array(
+            'edit_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'read_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'delete_post' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'edit_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'edit_others_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'publish_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'read_private_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'delete_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'delete_private_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'delete_published_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'delete_others_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'edit_private_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'edit_published_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+            'create_posts' => DCB_Permissions::CAP_RUN_OCR_TOOLS,
+        );
     }
 
     public static function draft_meta_key(string $form_key): string {
@@ -235,7 +299,7 @@ final class DCB_Submissions {
     }
 
     public static function render_submission_meta_box(WP_Post $post): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_REVIEW_SUBMISSIONS)) {
             echo '<p>Unauthorized.</p>';
             return;
         }
@@ -308,7 +372,7 @@ final class DCB_Submissions {
     }
 
     public static function submission_row_actions(array $actions, WP_Post $post): array {
-        if ($post->post_type !== 'dcb_form_submission' || !current_user_can('manage_options')) {
+        if ($post->post_type !== 'dcb_form_submission' || !DCB_Permissions::can(DCB_Permissions::CAP_REVIEW_SUBMISSIONS)) {
             return $actions;
         }
 

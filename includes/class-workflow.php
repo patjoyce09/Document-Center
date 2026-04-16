@@ -118,7 +118,7 @@ final class DCB_Workflow {
     }
 
     public static function render_meta_box(WP_Post $post): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_WORKFLOWS)) {
             echo '<p>Unauthorized.</p>';
             return;
         }
@@ -177,7 +177,7 @@ final class DCB_Workflow {
     }
 
     public static function handle_transition(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_WORKFLOWS)) {
             wp_die('Unauthorized');
         }
 
@@ -203,7 +203,7 @@ final class DCB_Workflow {
     }
 
     public static function handle_note(): void {
-        if (!current_user_can('manage_options')) {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_WORKFLOWS)) {
             wp_die('Unauthorized');
         }
         $submission_id = isset($_POST['submission_id']) ? (int) $_POST['submission_id'] : 0;

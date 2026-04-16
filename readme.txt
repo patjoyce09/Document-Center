@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.4
+Stable tag: 0.2.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -24,6 +24,19 @@ Document Center Builder provides:
 - Generic upload portal + routing rules
 - Optional Tutor LMS integration layer (isolated module)
 
+Capability model:
+- dcb_manage_forms
+- dcb_review_submissions
+- dcb_manage_workflows
+- dcb_manage_settings
+- dcb_run_ocr_tools
+
+On activation, capabilities are synced to roles:
+- administrator: all DCB capabilities
+- editor: submissions/workflow review subset by default
+
+Role capability grants are filterable via dcb_permissions_role_caps.
+
 == Installation ==
 1. Upload the plugin folder.
 2. Activate the plugin.
@@ -35,6 +48,12 @@ Document Center Builder provides:
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.5 =
+* Replaced placeholder read-based permissions with dedicated DCB capabilities and strict permission checks.
+* Hardened admin pages, workflow/admin_post routes, OCR diagnostics/AJAX, renderer export actions, and submission admin surfaces.
+* Added explicit custom post type capability maps for submissions, upload logs, and OCR review queue.
+* Synced role grants on activation/init with filterable role-cap mapping for enterprise customization.
+
 = 0.2.4 =
 * Fixed recursive OCR diagnostics/provider capability calls that could cause blank Builder and OCR Diagnostics admin pages.
 
