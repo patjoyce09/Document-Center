@@ -5,11 +5,11 @@ if (!defined('ABSPATH')) {
 }
 
 final class DCB_Permissions {
-    public const CAP_MANAGE_FORMS = 'dcb_manage_forms';
-    public const CAP_REVIEW_SUBMISSIONS = 'dcb_review_submissions';
-    public const CAP_MANAGE_WORKFLOWS = 'dcb_manage_workflows';
-    public const CAP_MANAGE_SETTINGS = 'dcb_manage_settings';
-    public const CAP_RUN_OCR_TOOLS = 'dcb_run_ocr_tools';
+    public const CAP_MANAGE_FORMS = 'edit_posts';
+    public const CAP_REVIEW_SUBMISSIONS = 'edit_posts';
+    public const CAP_MANAGE_WORKFLOWS = 'edit_posts';
+    public const CAP_MANAGE_SETTINGS = 'edit_posts';
+    public const CAP_RUN_OCR_TOOLS = 'edit_posts';
 
     public static function all_caps(): array {
         return array(
