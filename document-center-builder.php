@@ -90,8 +90,7 @@ if (!function_exists('dcb_register_recovery_menu')) {
             'read',
             'dcb-dashboard',
             'dcb_render_recovery_dashboard',
-            'dashicons-forms',
-            35
+            'dashicons-forms'
         );
     }
 }
@@ -119,7 +118,7 @@ if (!function_exists('dcb_plugin_action_links_global')) {
         }
 
         if (!isset($actions['dcb_open'])) {
-            $actions['dcb_open'] = '<a href="' . esc_url(admin_url('admin.php?page=dcb-dashboard')) . '">Open Document Center</a>';
+            $actions['dcb_open'] = '<a href="' . esc_url(admin_url('tools.php?page=dcb-recovery-dashboard')) . '">Open Document Center</a>';
         }
 
         return $actions;
@@ -136,7 +135,7 @@ if (!function_exists('dcb_register_tools_fallback_menu')) {
             __('Document Center', 'document-center-builder'),
             __('Document Center', 'document-center-builder'),
             'read',
-            'dcb-dashboard',
+            'dcb-recovery-dashboard',
             'dcb_render_recovery_dashboard'
         );
     }
@@ -157,7 +156,7 @@ if (!function_exists('dcb_plugins_screen_quick_notice')) {
             return;
         }
 
-        $url = admin_url('admin.php?page=dcb-dashboard');
+        $url = admin_url('tools.php?page=dcb-recovery-dashboard');
         echo '<div class="notice notice-info"><p><strong>Document Center:</strong> <a href="' . esc_url($url) . '">Open Dashboard</a></p></div>';
     }
 }

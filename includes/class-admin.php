@@ -16,8 +16,7 @@ final class DCB_Admin {
             DCB_Permissions::CAP_MANAGE_FORMS,
             'dcb-dashboard',
             array(__CLASS__, 'render_dashboard'),
-            'dashicons-forms',
-            35
+            'dashicons-forms'
         );
 
         add_submenu_page('dcb-dashboard', __('Forms Builder', 'document-center-builder'), __('Builder', 'document-center-builder'), DCB_Permissions::CAP_MANAGE_FORMS, 'dcb-builder', array('DCB_Builder', 'render_page'));
