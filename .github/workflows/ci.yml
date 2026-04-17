@@ -29,6 +29,13 @@ jobs:
           php tests/ocr_quality_benchmark_smoke.php
           php tests/ocr_realworld_benchmark_smoke.php
           php tests/ocr_local_replay_runner.php --json
+          php tests/ocr_capture_diagnostics_smoke.php
+          php tests/ocr_review_queue_filters_smoke.php
+          php tests/intake_source_normalization_smoke.php
+          php tests/intake_linkage_traceability_smoke.php
+          php tests/resource_center_status_model_smoke.php
+          php tests/intake_status_payload_smoke.php
+          php tests/admin_traceability_helpers_smoke.php
           php tests/output_signatures_smoke.php
           php tests/tutor_integration_smoke.php
 

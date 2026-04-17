@@ -161,6 +161,21 @@ Filter local replay before/after diagnostics payload used by replay runner and b
 3. `$mime` (`string`)
 4. `$inspection` (`array`)
 
+### `dcb_intake_source_channel`
+Filter normalized intake source channel for intake channel adapters.
+
+**Arguments**
+1. `$normalized_channel` (`string`)
+2. `$raw_channel` (`string`)
+
+### `dcb_resource_center_payload`
+Filter user-facing resource center payload (rows + summary) before upload portal render.
+
+**Arguments**
+1. `$payload` (`array`)
+2. `$user_id` (`int`)
+3. `$forms` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`

@@ -13,7 +13,10 @@ final class DCB_Submissions {
         add_action('add_meta_boxes', array(__CLASS__, 'add_submission_meta_boxes'));
         add_filter('manage_edit-dcb_form_submission_columns', array(__CLASS__, 'submission_columns'));
         add_action('manage_dcb_form_submission_posts_custom_column', array(__CLASS__, 'submission_column_content'), 10, 2);
+        add_filter('manage_edit-dcb_upload_log_columns', array(__CLASS__, 'upload_log_columns'));
+        add_action('manage_dcb_upload_log_posts_custom_column', array(__CLASS__, 'upload_log_column_content'), 10, 2);
         add_filter('post_row_actions', array(__CLASS__, 'submission_row_actions'), 10, 2);
+        add_action('dcb_workflow_status_transition', array(__CLASS__, 'handle_workflow_status_transition'), 10, 4);
     }
 
     public static function register_post_types(): void {
@@ -191,6 +194,11 @@ final class DCB_Submissions {
         if (!in_array($signature_mode, array('typed', 'drawn'), true)) {
             $signature_mode = 'typed';
         }
+        $intake_upload_log_id = isset($_POST['intake_upload_log_id']) ? (int) $_POST['intake_upload_log_id'] : 0;
+        $intake_review_id = isset($_POST['intake_review_id']) ? (int) $_POST['intake_review_id'] : 0;
+        $intake_trace_id = sanitize_text_field((string) ($_POST['intake_trace_id'] ?? ''));
+        $intake_source_channel = dcb_intake_normalize_source_channel((string) ($_POST['intake_source_channel'] ?? 'digital_only'));
+        $intake_capture_type = dcb_intake_normalize_capture_type((string) ($_POST['intake_capture_type'] ?? 'digital_manual'));
         $signature_drawn_data = isset($_POST['signature_drawn_data']) ? trim((string) wp_unslash($_POST['signature_drawn_data'])) : '';
         $signer_identity = sanitize_text_field((string) ($_POST['signer_identity'] ?? ''));
         $signature_timestamp_client = sanitize_text_field((string) ($_POST['signature_timestamp'] ?? ''));
@@ -248,6 +256,14 @@ final class DCB_Submissions {
         update_post_meta((int) $submission_id, '_dcb_form_attestation_text_version', $attestation_text_version !== '' ? $attestation_text_version : $policy_versions['attestation_text_version']);
         update_post_meta((int) $submission_id, '_dcb_workflow_status', 'submitted');
         update_post_meta((int) $submission_id, '_dcb_workflow_assignee_user_id', 0);
+        $resolved_trace_id = $intake_trace_id !== '' ? $intake_trace_id : dcb_intake_generate_trace_id($intake_upload_log_id, $intake_review_id);
+        update_post_meta((int) $submission_id, '_dcb_intake_trace_id', $resolved_trace_id);
+        update_post_meta((int) $submission_id, '_dcb_intake_upload_log_id', $intake_upload_log_id);
+        update_post_meta((int) $submission_id, '_dcb_intake_review_id', $intake_review_id);
+        update_post_meta((int) $submission_id, '_dcb_intake_source_channel', $intake_source_channel);
+        update_post_meta((int) $submission_id, '_dcb_intake_capture_type', $intake_capture_type);
+        update_post_meta((int) $submission_id, '_dcb_intake_state', 'submitted');
+
         if (class_exists('DCB_Workflow')) {
             DCB_Workflow::add_timeline((int) $submission_id, 'submitted', array('form_key' => $form_key));
         }
@@ -323,6 +339,8 @@ final class DCB_Submissions {
         dcb_send_submission_notification((int) $submission_id);
         do_action('dcb_submission_completed', (int) $submission_id, $form_key, $user_id);
 
+        self::link_submission_to_intake_chain((int) $submission_id, $intake_upload_log_id, $intake_review_id, $resolved_trace_id);
+
         delete_user_meta($user_id, self::draft_meta_key($form_key));
 
         wp_send_json_success(array('message' => 'Form submitted successfully.', 'submissionId' => (int) $submission_id));
@@ -339,10 +357,36 @@ final class DCB_Submissions {
         }
 
         $submission_id = (int) $post->ID;
+        self::render_submission_traceability_panel($submission_id);
         echo dcb_render_submission_html($submission_id, 'admin'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
         if (class_exists('DCB_Integration_Tutor')) {
             echo DCB_Integration_Tutor::render_submission_integration_meta($submission_id); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
         }
+    }
+
+    private static function render_submission_traceability_panel(int $submission_id): void {
+        $source_channel = dcb_intake_normalize_source_channel((string) get_post_meta($submission_id, '_dcb_intake_source_channel', true));
+        $capture_type = dcb_intake_normalize_capture_type((string) get_post_meta($submission_id, '_dcb_intake_capture_type', true));
+        $trace_id = sanitize_text_field((string) get_post_meta($submission_id, '_dcb_intake_trace_id', true));
+        $upload_log_id = (int) get_post_meta($submission_id, '_dcb_intake_upload_log_id', true);
+        $review_id = (int) get_post_meta($submission_id, '_dcb_intake_review_id', true);
+        $workflow_status = sanitize_key((string) get_post_meta($submission_id, '_dcb_workflow_status', true));
+        $review_status = sanitize_key((string) get_post_meta($submission_id, '_dcb_intake_review_status', true));
+        $state = sanitize_key((string) get_post_meta($submission_id, '_dcb_intake_state', true));
+        if ($state === '') {
+            $state = dcb_intake_state_from_statuses($workflow_status, $review_status);
+        }
+
+        echo '<div style="margin:0 0 14px;padding:12px;border:1px solid #dbe3f0;border-radius:8px;background:#f8fbff;">';
+        echo '<p style="margin:0 0 8px;"><strong>Intake Traceability</strong></p>';
+        echo '<table class="widefat striped" style="max-width:920px"><tbody>';
+        echo '<tr><th style="width:240px">Trace ID</th><td>' . esc_html($trace_id !== '' ? $trace_id : '—') . '</td></tr>';
+        echo '<tr><th>Original Source</th><td>' . esc_html($source_channel) . ' / ' . esc_html($capture_type) . '</td></tr>';
+        echo '<tr><th>OCR Review</th><td>' . esc_html($review_id > 0 ? ('#' . $review_id . ' (' . ($review_status !== '' ? $review_status : 'n/a') . ')') : 'Not linked') . '</td></tr>';
+        echo '<tr><th>Original Artifact</th><td>' . esc_html($upload_log_id > 0 ? ('Upload Log #' . $upload_log_id) : 'Not linked') . '</td></tr>';
+        echo '<tr><th>Workflow / Output</th><td>' . esc_html(($workflow_status !== '' ? $workflow_status : 'submitted') . ' / ' . dcb_intake_state_label($state)) . '</td></tr>';
+        echo '</tbody></table>';
+        echo '</div>';
     }
 
     public static function submission_columns(array $columns): array {
@@ -355,6 +399,7 @@ final class DCB_Submissions {
             'title' => __('Record', 'document-center-builder'),
             'dcb_form_name' => __('Form', 'document-center-builder'),
             'dcb_form_version' => __('Version', 'document-center-builder'),
+            'dcb_intake_trace' => __('Intake Trace', 'document-center-builder'),
             'dcb_workflow_status' => __('Workflow', 'document-center-builder'),
             'dcb_workflow_assignee' => __('Assignee', 'document-center-builder'),
             'dcb_submitter' => __('Submitter', 'document-center-builder'),
@@ -385,6 +430,18 @@ final class DCB_Submissions {
                 }
                 $statuses = class_exists('DCB_Workflow') ? DCB_Workflow::statuses() : array();
                 echo esc_html((string) ($statuses[$status] ?? $status));
+                break;
+            case 'dcb_intake_trace':
+                $source_channel = dcb_intake_normalize_source_channel((string) get_post_meta($post_id, '_dcb_intake_source_channel', true));
+                $state = sanitize_key((string) get_post_meta($post_id, '_dcb_intake_state', true));
+                if ($state === '') {
+                    $state = 'submitted';
+                }
+                $trace_id = sanitize_text_field((string) get_post_meta($post_id, '_dcb_intake_trace_id', true));
+                echo esc_html($source_channel . ' • ' . dcb_intake_state_label($state));
+                if ($trace_id !== '') {
+                    echo '<br/><small>' . esc_html($trace_id) . '</small>';
+                }
                 break;
             case 'dcb_workflow_assignee':
                 $assignee = (int) get_post_meta($post_id, '_dcb_workflow_assignee_user_id', true);
@@ -419,5 +476,97 @@ final class DCB_Submissions {
         $actions['dcb_export_pdf'] = '<a href="' . esc_url(DCB_Renderer::submission_export_pdf_url($submission_id)) . '">Export PDF</a>';
 
         return $actions;
+    }
+
+    public static function upload_log_columns(array $columns): array {
+        if (!isset($columns['title'])) {
+            return $columns;
+        }
+
+        return array(
+            'cb' => $columns['cb'] ?? '',
+            'title' => __('Upload Artifact', 'document-center-builder'),
+            'dcb_upload_channel' => __('Source Channel', 'document-center-builder'),
+            'dcb_upload_capture' => __('Capture Type', 'document-center-builder'),
+            'dcb_upload_trace' => __('Traceability', 'document-center-builder'),
+            'dcb_upload_state' => __('Intake State', 'document-center-builder'),
+            'date' => $columns['date'] ?? __('Date', 'document-center-builder'),
+        );
+    }
+
+    public static function upload_log_column_content(string $column, int $post_id): void {
+        if ($column === 'dcb_upload_channel') {
+            echo esc_html(dcb_intake_normalize_source_channel((string) get_post_meta($post_id, '_dcb_upload_source_channel', true)));
+            return;
+        }
+
+        if ($column === 'dcb_upload_capture') {
+            echo esc_html(dcb_intake_normalize_capture_type((string) get_post_meta($post_id, '_dcb_upload_capture_type', true)));
+            return;
+        }
+
+        if ($column === 'dcb_upload_trace') {
+            $trace = sanitize_text_field((string) get_post_meta($post_id, '_dcb_upload_trace_id', true));
+            $review_id = (int) get_post_meta($post_id, '_dcb_upload_ocr_review_item_id', true);
+            $submission_id = (int) get_post_meta($post_id, '_dcb_upload_linked_submission_id', true);
+            echo esc_html($trace !== '' ? $trace : '—');
+            if ($review_id > 0 || $submission_id > 0) {
+                echo '<br/><small>' . esc_html('Review #' . $review_id . ' / Submission #' . $submission_id) . '</small>';
+            }
+            return;
+        }
+
+        if ($column === 'dcb_upload_state') {
+            $state = sanitize_key((string) get_post_meta($post_id, '_dcb_upload_intake_state', true));
+            if ($state === '') {
+                $state = 'uploaded';
+            }
+            echo esc_html(dcb_intake_state_label($state));
+            return;
+        }
+    }
+
+    private static function link_submission_to_intake_chain(int $submission_id, int $upload_log_id, int $review_id, string $trace_id): void {
+        $workflow_status = sanitize_key((string) get_post_meta($submission_id, '_dcb_workflow_status', true));
+        if ($workflow_status === '') {
+            $workflow_status = 'submitted';
+        }
+
+        $review_status = $review_id > 0
+            ? sanitize_key((string) get_post_meta($review_id, '_dcb_ocr_review_status', true))
+            : '';
+        $state = dcb_intake_state_from_statuses($workflow_status, $review_status);
+
+        update_post_meta($submission_id, '_dcb_intake_review_status', $review_status);
+        update_post_meta($submission_id, '_dcb_intake_state', $state);
+
+        if ($upload_log_id > 0) {
+            update_post_meta($upload_log_id, '_dcb_upload_linked_submission_id', $submission_id);
+            update_post_meta($upload_log_id, '_dcb_upload_linked_workflow_status', $workflow_status);
+            update_post_meta($upload_log_id, '_dcb_upload_intake_state', $state);
+            update_post_meta($upload_log_id, '_dcb_upload_trace_id', sanitize_text_field($trace_id));
+        }
+
+        if ($review_id > 0) {
+            update_post_meta($review_id, '_dcb_ocr_review_linked_submission_id', $submission_id);
+            update_post_meta($review_id, '_dcb_ocr_review_trace_id', sanitize_text_field($trace_id));
+        }
+    }
+
+    public static function handle_workflow_status_transition(int $submission_id, string $from_status, string $to_status, string $note): void {
+        $submission_id = max(0, $submission_id);
+        if ($submission_id < 1) {
+            return;
+        }
+
+        $review_status = sanitize_key((string) get_post_meta($submission_id, '_dcb_intake_review_status', true));
+        $state = dcb_intake_state_from_statuses($to_status, $review_status);
+        update_post_meta($submission_id, '_dcb_intake_state', $state);
+
+        $upload_log_id = (int) get_post_meta($submission_id, '_dcb_intake_upload_log_id', true);
+        if ($upload_log_id > 0) {
+            update_post_meta($upload_log_id, '_dcb_upload_linked_workflow_status', sanitize_key($to_status));
+            update_post_meta($upload_log_id, '_dcb_upload_intake_state', $state);
+        }
     }
 }

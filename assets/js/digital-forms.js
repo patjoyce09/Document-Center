@@ -3,6 +3,15 @@
 
   var cfg = window.DCB_DIGITAL_FORMS || {};
   var forms = cfg.forms || {};
+  var query = new URLSearchParams(window.location.search || '');
+  var intakeContext = {
+    formKey: String(query.get('dcb_form') || ''),
+    uploadLogId: String(query.get('dcb_upload_log') || ''),
+    reviewId: String(query.get('dcb_review') || ''),
+    traceId: String(query.get('dcb_trace') || ''),
+    sourceChannel: String(query.get('dcb_channel') || ''),
+    captureType: String(query.get('dcb_capture') || '')
+  };
   var runtime = {
     activeFormKey: '',
     activeStepIndex: 0
@@ -240,7 +249,12 @@
         form_key: formKey,
         fields: JSON.stringify(fields),
         signature_mode: 'typed',
-        signer_identity: (cfg.currentUser && cfg.currentUser.name) || ''
+        signer_identity: (cfg.currentUser && cfg.currentUser.name) || '',
+        intake_upload_log_id: intakeContext.uploadLogId,
+        intake_review_id: intakeContext.reviewId,
+        intake_trace_id: intakeContext.traceId,
+        intake_source_channel: intakeContext.sourceChannel,
+        intake_capture_type: intakeContext.captureType
       }).done(function (res) {
         if (!res || !res.success) {
           var errors = res && res.data && res.data.errors ? res.data.errors : [(res && res.data && res.data.message) || 'Submission failed.'];
@@ -255,5 +269,10 @@
         $status.text('Submission failed.');
       });
     });
+
+    if (intakeContext.formKey && Object.prototype.hasOwnProperty.call(forms, intakeContext.formKey)) {
+      $select.val(intakeContext.formKey);
+      renderForm(intakeContext.formKey);
+    }
   });
 })(jQuery);

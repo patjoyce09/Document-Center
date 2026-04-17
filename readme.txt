@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.4
+Stable tag: 0.3.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,24 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.6 =
+* Added normalized intake channel model (`direct_upload`, `phone_photo`, `scanned_pdf`, `email_import`, `digital_only`) with channel adapter handling in upload + submission flows.
+* Added stronger original-capture traceability metadata chain across upload artifact, OCR review item, and submission (`trace_id`, source/capture type, linked review/submission IDs, intake state).
+* Added intake state synchronization across OCR review and workflow transitions for clearer correction/review/finalized lifecycle visibility.
+* Added upload artifact admin surfacing (menu + compact columns) and expanded OCR review queue traceability column.
+* Added compact intake traceability panel on submission admin detail view.
+* Hardened upload portal resource center with packet-aware status table for required/optional forms, missing required, correction, and approved/finalized visibility.
+* Added intake channel selector and enhanced form-link adapters from resource center rows to clean fillable form flows.
+* Added reusable intake helper layer (`includes/helpers-intake.php`) and documented new hooks (`dcb_intake_source_channel`, `dcb_resource_center_payload`).
+
+= 0.3.5 =
+* Added OCR review queue usability pass with source/capture-risk columns and admin list filters (status, source type, capture risk, unresolved risk).
+* Added reviewer-facing capture diagnostics panel in OCR review detail with warning/recommendation and normalization proxy summaries.
+* Persisted scalar capture-risk metadata (`source_type`, warning count, risk bucket, unresolved flag) for reliable queue filtering and triage.
+* Linked upload logs to OCR review items for clearer intake-to-review traceability.
+* Polished intake upload portal UX with resource center guidance, richer confidence/capture result columns, and batch-level capture warning summaries.
+* Added smoke tests for capture diagnostics metadata shaping and OCR review queue filter query behavior.
+
 = 0.3.4 =
 * Added local replay runner utility (`tests/ocr_local_replay_runner.php`) for operational fixture replay with text fallback and optional local binary support.
 * Added before/after normalization diagnostics with text-length/confidence/warning deltas and per-stage attempt/application counts.

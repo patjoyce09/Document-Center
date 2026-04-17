@@ -42,6 +42,36 @@
   margin: 10px 0;
 }
 
+.th-upload-intake-alert {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f3f7ff;
+  border: 1px solid #d9e4fb;
+}
+
+.th-upload-intake-alert p {
+  margin: 0 0 6px;
+}
+
+.th-upload-intake-alert ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.th-upload-resource-center h3 {
+  margin-top: 0;
+}
+
+.th-upload-resource-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.th-upload-resource-links {
+  margin-top: 8px;
+}
+
 .th-upload-table {
   width: 100%;
   border-collapse: collapse;
@@ -52,4 +82,48 @@
   border-bottom: 1px solid #e2e8f4;
   text-align: left;
   padding: 8px;
+}
+
+.th-upload-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.th-upload-badge-ok {
+  background: #e9f9ef;
+  color: #0d6b2f;
+}
+
+.th-upload-badge-info {
+  background: #eaf3ff;
+  color: #1f57cc;
+}
+
+.th-upload-badge-warn {
+  background: #fff3e6;
+  color: #8a4300;
+}
+
+.th-upload-confidence-cell,
+.th-upload-guidance-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.th-upload-confidence-value,
+.th-upload-guidance-meta {
+  font-size: 12px;
+  color: #42526e;
+}
+
+.th-upload-guidance-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #384860;
 }

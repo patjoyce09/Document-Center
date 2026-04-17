@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 final class DCB_Uploader {
     public static function init(): void {
         add_action('wp_ajax_dcb_upload_files', array(__CLASS__, 'upload_files_ajax'));
+        add_action('dcb_ocr_review_status_changed', array(__CLASS__, 'handle_ocr_review_status_changed'), 10, 4);
     }
 
     public static function upload_files_ajax(): void {
@@ -21,6 +22,7 @@ final class DCB_Uploader {
         }
 
         $hint = sanitize_text_field((string) ($_POST['typeHint'] ?? ''));
+        $intake_channel_raw = sanitize_text_field((string) ($_POST['intakeChannel'] ?? 'direct_upload'));
         $results = array();
 
         $files = self::normalize_files_array((array) $_FILES['files']);
@@ -52,6 +54,11 @@ final class DCB_Uploader {
             $ocr = (array) ($text_result['ocr'] ?? array());
             $confidence = isset($ocr['confidence_proxy']) ? (float) $ocr['confidence_proxy'] : 0.0;
             $review_item_id = isset($text_result['review_item_id']) ? (int) $text_result['review_item_id'] : 0;
+            $capture_diagnostics = self::extract_capture_diagnostics($text_result);
+            $source_channel = self::resolve_source_channel($intake_channel_raw, $mime, (string) ($capture_diagnostics['input_source_type'] ?? 'unknown'));
+            $capture_type = dcb_intake_capture_type_for_channel($source_channel, $mime, (string) ($capture_diagnostics['input_source_type'] ?? 'unknown'));
+            $trace_id = dcb_intake_generate_trace_id(0, $review_item_id);
+            $intake_state = $review_item_id > 0 ? 'ocr_review_pending' : 'uploaded';
 
             $routing_target = self::resolve_recipients($hint);
             $status = 'routed';
@@ -68,7 +75,25 @@ final class DCB_Uploader {
                 'ocr_text' => (string) ($text_result['text'] ?? ''),
                 'ocr_meta' => wp_json_encode($ocr),
                 'ocr_review_item_id' => $review_item_id,
+                'source_channel' => $source_channel,
+                'capture_type' => $capture_type,
+                'trace_id' => $trace_id,
+                'intake_state' => $intake_state,
+                'linked_submission_id' => 0,
+                'uploaded_at' => current_time('mysql'),
             ));
+
+            if ($review_item_id > 0 && $log_id > 0) {
+                update_post_meta($review_item_id, '_dcb_ocr_review_upload_log_id', $log_id);
+                update_post_meta($log_id, '_dcb_upload_ocr_review_item_id', $review_item_id);
+                update_post_meta($review_item_id, '_dcb_ocr_review_trace_id', $trace_id);
+                update_post_meta($review_item_id, '_dcb_ocr_review_source_channel', $source_channel);
+                update_post_meta($review_item_id, '_dcb_ocr_review_capture_type', $capture_type);
+            }
+
+            if ($log_id > 0) {
+                update_post_meta($log_id, '_dcb_upload_trace_id', $trace_id);
+            }
 
             if ($routing_target !== '') {
                 $subject = '[Document Center Upload] ' . sanitize_file_name((string) ($file['name'] ?? basename($path)));
@@ -91,6 +116,16 @@ final class DCB_Uploader {
                 'sentTo' => $routing_target,
                 'status' => $status,
                 'confidence' => round($confidence, 3),
+                'confidenceBucket' => dcb_confidence_bucket($confidence),
+                'inputSourceType' => (string) ($capture_diagnostics['input_source_type'] ?? 'unknown'),
+                'captureWarningCount' => (int) ($capture_diagnostics['capture_warning_count'] ?? 0),
+                'captureWarnings' => isset($capture_diagnostics['capture_warnings']) && is_array($capture_diagnostics['capture_warnings']) ? $capture_diagnostics['capture_warnings'] : array(),
+                'captureRecommendations' => isset($capture_diagnostics['capture_recommendations']) && is_array($capture_diagnostics['capture_recommendations']) ? $capture_diagnostics['capture_recommendations'] : array(),
+                'captureRiskBucket' => (string) ($capture_diagnostics['capture_risk_bucket'] ?? 'clean'),
+                'sourceChannel' => $source_channel,
+                'captureType' => $capture_type,
+                'intakeState' => $intake_state,
+                'traceId' => $trace_id,
                 'error' => $error,
                 'logId' => $log_id,
                 'reviewItemId' => $review_item_id,
@@ -176,5 +211,79 @@ final class DCB_Uploader {
         update_post_meta((int) $id, '_dcb_upload_created_at', current_time('mysql'));
 
         return (int) $id;
+    }
+
+    private static function extract_capture_diagnostics(array $text_result): array {
+        $normalization = isset($text_result['input_normalization']) && is_array($text_result['input_normalization'])
+            ? $text_result['input_normalization']
+            : array();
+
+        $warnings_raw = isset($normalization['warnings']) && is_array($normalization['warnings']) ? $normalization['warnings'] : array();
+        $warnings = array();
+        foreach ($warnings_raw as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $message = sanitize_text_field((string) ($row['message'] ?? ''));
+            if ($message !== '') {
+                $warnings[] = $message;
+            }
+        }
+
+        $recommendations_raw = isset($normalization['capture_recommendations']) && is_array($normalization['capture_recommendations'])
+            ? $normalization['capture_recommendations']
+            : array();
+        $recommendations = array();
+        foreach ($recommendations_raw as $tip) {
+            $tip = sanitize_text_field((string) $tip);
+            if ($tip !== '') {
+                $recommendations[] = $tip;
+            }
+        }
+
+        $warning_count = count($warnings);
+        $risk_bucket = function_exists('dcb_ocr_capture_risk_bucket') ? dcb_ocr_capture_risk_bucket($warning_count) : ($warning_count > 0 ? 'moderate' : 'clean');
+
+        return array(
+            'input_source_type' => sanitize_key((string) ($text_result['input_source_type'] ?? 'unknown')),
+            'capture_warning_count' => $warning_count,
+            'capture_warnings' => array_values(array_unique($warnings)),
+            'capture_recommendations' => array_values(array_unique($recommendations)),
+            'capture_risk_bucket' => sanitize_key((string) $risk_bucket),
+        );
+    }
+
+    private static function resolve_source_channel(string $requested, string $mime, string $source_type): string {
+        $channel = dcb_intake_normalize_source_channel($requested);
+        $mime = strtolower(trim($mime));
+        $source_type = sanitize_key($source_type);
+
+        if ($channel === 'direct_upload') {
+            if ($source_type === 'photo' || strpos($mime, 'image/') === 0) {
+                return 'phone_photo';
+            }
+            if ($source_type === 'pdf' || strpos($mime, 'application/pdf') === 0) {
+                return 'scanned_pdf';
+            }
+        }
+
+        return $channel;
+    }
+
+    public static function handle_ocr_review_status_changed(int $review_id, string $from_status, string $to_status, string $note): void {
+        $review_id = max(0, $review_id);
+        if ($review_id < 1) {
+            return;
+        }
+
+        $log_id = (int) get_post_meta($review_id, '_dcb_ocr_review_upload_log_id', true);
+        if ($log_id < 1) {
+            return;
+        }
+
+        $workflow_status = sanitize_key((string) get_post_meta($log_id, '_dcb_upload_linked_workflow_status', true));
+        $new_state = dcb_intake_state_from_statuses($workflow_status, $to_status);
+        update_post_meta($log_id, '_dcb_upload_intake_state', $new_state);
+        update_post_meta($log_id, '_dcb_upload_last_status_note', sanitize_text_field($note));
     }
 }

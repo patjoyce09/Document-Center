@@ -1650,6 +1650,8 @@ function dcb_ocr_review_update_status(int $review_id, string $status, string $no
 
     update_post_meta($review_id, '_dcb_ocr_review_status', $status);
     update_post_meta($review_id, '_dcb_ocr_review_status_updated_at', current_time('mysql'));
+    $warning_count = max(0, (int) get_post_meta($review_id, '_dcb_ocr_review_capture_warning_count', true));
+    update_post_meta($review_id, '_dcb_ocr_review_capture_risk_unresolved', dcb_ocr_review_unresolved_capture_risk($status, $warning_count) ? '1' : '0');
     dcb_ocr_review_append_revision($review_id, 'status_changed', array(
         'from' => $prev,
         'to' => $status,
@@ -1834,6 +1836,12 @@ function dcb_ocr_review_reprocess(int $review_id, string $mode = ''): array {
     update_post_meta($review_id, '_dcb_ocr_review_failure_reason', dcb_ocr_normalize_failure_reason((string) ($result['failure_reason'] ?? '')));
     update_post_meta($review_id, '_dcb_ocr_review_provenance', wp_json_encode((array) ($result['provenance'] ?? array())));
     update_post_meta($review_id, '_dcb_ocr_review_page_count', isset($result['pages']) && is_array($result['pages']) ? count($result['pages']) : 0);
+    $capture_meta = dcb_ocr_extract_capture_meta($result);
+    update_post_meta($review_id, '_dcb_ocr_review_capture_meta', wp_json_encode($capture_meta));
+    update_post_meta($review_id, '_dcb_ocr_review_source_type', sanitize_key((string) ($capture_meta['input_source_type'] ?? 'unknown')));
+    update_post_meta($review_id, '_dcb_ocr_review_capture_warning_count', max(0, (int) ($capture_meta['capture_warning_count'] ?? 0)));
+    update_post_meta($review_id, '_dcb_ocr_review_capture_risk_bucket', dcb_ocr_capture_risk_bucket((int) ($capture_meta['capture_warning_count'] ?? 0)));
+    update_post_meta($review_id, '_dcb_ocr_review_capture_risk_unresolved', dcb_ocr_review_unresolved_capture_risk('reprocessed', (int) ($capture_meta['capture_warning_count'] ?? 0)) ? '1' : '0');
 
     dcb_ocr_review_append_revision($review_id, 'reprocessed', array(
         'mode' => $mode,
@@ -1847,6 +1855,59 @@ function dcb_ocr_review_reprocess(int $review_id, string $mode = ''): array {
     }
 
     return array('ok' => true, 'result' => $result);
+}
+
+function dcb_ocr_capture_risk_bucket(int $warning_count): string {
+    if ($warning_count >= 3) {
+        return 'high';
+    }
+    if ($warning_count >= 1) {
+        return 'moderate';
+    }
+    return 'clean';
+}
+
+function dcb_ocr_review_unresolved_capture_risk(string $status, int $warning_count): bool {
+    $status = sanitize_key($status);
+    if ($warning_count < 1) {
+        return false;
+    }
+    return !in_array($status, array('approved', 'rejected'), true);
+}
+
+function dcb_ocr_extract_capture_meta(array $result): array {
+    $source = sanitize_key((string) ($result['input_source_type'] ?? 'unknown'));
+    if ($source === '') {
+        $source = 'unknown';
+    }
+
+    $warnings = isset($result['input_normalization']['warnings']) && is_array($result['input_normalization']['warnings'])
+        ? $result['input_normalization']['warnings']
+        : array();
+    $recommendations = isset($result['input_normalization']['capture_recommendations']) && is_array($result['input_normalization']['capture_recommendations'])
+        ? $result['input_normalization']['capture_recommendations']
+        : array();
+
+    $clean_recommendations = array();
+    foreach ($recommendations as $message) {
+        if (!is_scalar($message)) {
+            continue;
+        }
+        $value = sanitize_text_field((string) $message);
+        if ($value !== '') {
+            $clean_recommendations[] = $value;
+        }
+    }
+
+    return array(
+        'input_source_type' => $source,
+        'capture_warning_count' => count($warnings),
+        'normalization_improvement_proxy' => isset($result['input_normalization']['normalization_improvement_proxy'])
+            ? round(max(0.0, min(1.0, (float) $result['input_normalization']['normalization_improvement_proxy'])), 4)
+            : 0.0,
+        'capture_recommendations' => array_values(array_unique($clean_recommendations)),
+        'capture_risk_bucket' => dcb_ocr_capture_risk_bucket(count($warnings)),
+    );
 }
 
 function dcb_ocr_review_queue_summary(): array {
@@ -1985,15 +2046,12 @@ function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, arra
     update_post_meta((int) $post_id, '_dcb_ocr_review_extraction', $extraction_json);
     update_post_meta((int) $post_id, '_dcb_ocr_review_text', sanitize_textarea_field((string) ($result['text'] ?? '')));
     update_post_meta((int) $post_id, '_dcb_ocr_review_provenance', wp_json_encode((array) ($result['provenance'] ?? array())));
-    if (isset($result['input_normalization']) && is_array($result['input_normalization'])) {
-        $capture_meta = array(
-            'input_source_type' => sanitize_key((string) ($result['input_source_type'] ?? 'unknown')),
-            'capture_warning_count' => isset($result['input_normalization']['warnings']) && is_array($result['input_normalization']['warnings']) ? count($result['input_normalization']['warnings']) : 0,
-            'normalization_improvement_proxy' => isset($result['input_normalization']['normalization_improvement_proxy']) ? round(max(0.0, min(1.0, (float) $result['input_normalization']['normalization_improvement_proxy'])), 4) : 0.0,
-            'capture_recommendations' => isset($result['input_normalization']['capture_recommendations']) && is_array($result['input_normalization']['capture_recommendations']) ? $result['input_normalization']['capture_recommendations'] : array(),
-        );
-        update_post_meta((int) $post_id, '_dcb_ocr_review_capture_meta', wp_json_encode($capture_meta));
-    }
+    $capture_meta = dcb_ocr_extract_capture_meta($result);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_capture_meta', wp_json_encode($capture_meta));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_source_type', sanitize_key((string) ($capture_meta['input_source_type'] ?? 'unknown')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_capture_warning_count', max(0, (int) ($capture_meta['capture_warning_count'] ?? 0)));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_capture_risk_bucket', sanitize_key((string) ($capture_meta['capture_risk_bucket'] ?? 'clean')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_capture_risk_unresolved', dcb_ocr_review_unresolved_capture_risk('pending_review', (int) ($capture_meta['capture_warning_count'] ?? 0)) ? '1' : '0');
 
     dcb_ocr_review_append_revision((int) $post_id, 'created', array(
         'status' => 'pending_review',
