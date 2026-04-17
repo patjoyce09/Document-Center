@@ -183,6 +183,116 @@ Filter assembled intake trace timeline payload before admin timeline rendering.
 1. `$timeline_payload` (`array`)
 2. `$raw_payload` (`array`)
 
+### `dcb_chart_routing_extracted_identifiers`
+Filter normalized identifier extraction payload before candidate matching.
+
+**Arguments**
+1. `$identifiers` (`array`)
+2. `$payload` (`array`)
+
+### `dcb_chart_routing_candidate_pool`
+Filter/add candidate patient/chart records for a queued upload artifact.
+
+**Arguments**
+1. `$candidates` (`array`)
+2. `$upload_log_id` (`int`)
+3. `$identifiers` (`array`)
+4. `$context` (`array`)
+
+### `dcb_chart_routing_connector_adapter`
+Override connector instance resolved by mode/config.
+
+**Arguments**
+1. `$connector` (`DCB_Chart_Routing_Connector_Interface`)
+2. `$mode` (`string`)
+3. `$config` (`array`)
+
+### `dcb_chart_routing_manual_candidates`
+Provide manual-mode candidate rows.
+
+**Arguments**
+1. `$candidates` (`array`)
+2. `$identifiers` (`array`)
+3. `$context` (`array`)
+4. `$config` (`array`)
+
+### `dcb_chart_routing_schedule_context`
+Provide optional schedule context rows used by manual adapter.
+
+**Arguments**
+1. `$schedule_rows` (`array`)
+2. `$identifiers` (`array`)
+3. `$context` (`array`)
+4. `$config` (`array`)
+
+### `dcb_chart_routing_report_import_candidates`
+Provide report-import-mode candidate rows.
+
+**Arguments**
+1. `$candidates` (`array`)
+2. `$identifiers` (`array`)
+3. `$context` (`array`)
+4. `$config` (`array`)
+
+### `dcb_chart_routing_report_import_attach`
+Adapter boundary for report-import route/attach operation.
+
+**Arguments**
+1. `$result` (`array`)
+2. `$chart_target` (`array`)
+3. `$artifact` (`array`)
+4. `$context` (`array`)
+5. `$config` (`array`)
+
+### `dcb_chart_routing_connector_candidates`
+Provide generic API/Bot connector candidate rows.
+
+**Arguments**
+1. `$candidates` (`array`)
+2. `$mode` (`string`)
+3. `$identifiers` (`array`)
+4. `$context` (`array`)
+5. `$config` (`array`)
+
+### `dcb_chart_routing_connector_resolve_target`
+Resolve chart target in API/Bot connector modes.
+
+**Arguments**
+1. `$result` (`array`)
+2. `$mode` (`string`)
+3. `$candidate` (`array`)
+4. `$context` (`array`)
+5. `$config` (`array`)
+
+### `dcb_chart_routing_connector_attach`
+Attach routed document in API/Bot connector modes.
+
+**Arguments**
+1. `$result` (`array`)
+2. `$mode` (`string`)
+3. `$chart_target` (`array`)
+4. `$artifact` (`array`)
+5. `$context` (`array`)
+6. `$config` (`array`)
+
+### `dcb_chart_routing_connector_schedule_context`
+Provide schedule rows for API/Bot connector modes.
+
+**Arguments**
+1. `$schedule_rows` (`array`)
+2. `$mode` (`string`)
+3. `$identifiers` (`array`)
+4. `$context` (`array`)
+5. `$config` (`array`)
+
+### `dcb_chart_routing_connector_validate_config`
+Validate API/Bot connector config payload.
+
+**Arguments**
+1. `$result` (`array`)
+2. `$mode` (`string`)
+3. `$config` (`array`)
+
 ### `dcb_sample_template_pack`
 Filter bundled generic sample templates before load into builder forms.
 
@@ -261,6 +371,21 @@ Generic workflow notification trigger architecture.
 
 **Arguments**
 1. `$submission_id` (`int`)
+2. `$event` (`string`)
+3. `$payload` (`array`)
+
+### `dcb_upload_artifact_logged`
+Fires when upload artifact metadata has been persisted and linked.
+
+**Arguments**
+1. `$upload_log_id` (`int`)
+2. `$context` (`array`)
+
+### `dcb_chart_routing_audit_event`
+Fires when chart-routing audit trail event is recorded.
+
+**Arguments**
+1. `$queue_id` (`int`)
 2. `$event` (`string`)
 3. `$payload` (`array`)
 

@@ -23,6 +23,7 @@ Document Center Builder provides:
 - Optional Tutor LMS integration layer with structured form-to-course/lesson/quiz mapping
 - OCR diagnostics, capability checks, and OCR review queue
 - Generic upload portal + routing rules
+- Document-to-chart routing prototype queue with confidence-tiered matching and connector boundary
 - Setup & operations admin surface with first-run readiness checks
 - Generic sample template pack and validated forms import/export flow
 - Compact system health snapshot panel with action links
@@ -53,6 +54,12 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 
 == Changelog ==
 = 0.3.9 =
+* Added first EMR-facing Document-to-Chart Routing prototype with isolated queue and audit trail (upload/import -> extract identifiers -> candidate matching -> confirm/route workflow).
+* Added generic matching model (MRN/patient ID, name + DOB, visit/service date, clinician) with confidence tiers (`high_confidence`, `medium_confidence`, `low_confidence`, `no_match`) and name-only guardrail.
+* Added lightweight document type classifier (`consent`, `intake`, `physician_order`, `visit_note`, `eval`, `miscellaneous`) with uncertainty tracking.
+* Added connector/service boundary (`search_patient_candidates`, `resolve_chart_target`, `attach_document_to_chart`, `get_schedule_context`, `validate_connector_config`) with safe manual/no-op and report-import placeholder adapters.
+* Added chart-routing mode/config settings boundary (`none_manual`, `api`, `bot`, `report_import`) without vendor lock-in.
+* Added smoke tests for matching/scoring, confidence tiering, payload shaping, capability enforcement, and manual connector behavior.
 * Added compact System Health Snapshot panel on the Document Center dashboard with setup readiness, OCR mode/health, upload/storage note, OCR queue counts, unresolved OCR risk count, workflow summary, and recent ops action state.
 * Added action-oriented snapshot links to Setup & Operations, OCR diagnostics/queue, intake trace timeline/upload artifacts, and workflow queues.
 * Added operations action-state recording (`dcb_ops_last_action`) for import/export/sample-template visibility.

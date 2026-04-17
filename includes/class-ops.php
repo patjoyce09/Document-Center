@@ -68,6 +68,7 @@ final class DCB_Ops {
         echo '<h2 style="margin-top:20px;">Actionable Diagnostics</h2>';
         echo '<ul style="list-style:disc;padding-left:20px;">';
         echo '<li><a href="' . esc_url(admin_url('admin.php?page=dcb-ocr-diagnostics')) . '">OCR diagnostics and review queue health</a></li>';
+        echo '<li><a href="' . esc_url(admin_url('admin.php?page=dcb-chart-routing')) . '">Chart routing queue and confidence-based review</a></li>';
         echo '<li><a href="' . esc_url(admin_url('admin.php?page=dcb-settings')) . '">Settings (OCR mode, API, workflow defaults, uninstall policy)</a></li>';
         echo '<li><a href="' . esc_url(admin_url('admin.php?page=dcb-intake-trace')) . '">Intake trace timeline (chain-first debugging by trace_id)</a></li>';
         echo '</ul>';

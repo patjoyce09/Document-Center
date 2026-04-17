@@ -597,8 +597,8 @@ final class DCB_Chart_Routing {
             $parts = array_values(array_filter(preg_split('/\s+/', $value) ?: array()));
             $masked_parts = array();
             foreach ($parts as $part) {
-                $first = mb_substr($part, 0, 1);
-                $masked_parts[] = $first . str_repeat('*', max(1, mb_strlen($part) - 1));
+                $first = substr($part, 0, 1);
+                $masked_parts[] = $first . str_repeat('*', max(1, strlen($part) - 1));
             }
             return implode(' ', $masked_parts);
         }
@@ -611,11 +611,11 @@ final class DCB_Chart_Routing {
         }
 
         if ($key === 'mrn' || $key === 'patient_id') {
-            $len = mb_strlen($value);
+            $len = strlen($value);
             if ($len <= 4) {
                 return str_repeat('*', $len);
             }
-            return str_repeat('*', $len - 4) . mb_substr($value, -4);
+            return str_repeat('*', $len - 4) . substr($value, -4);
         }
 
         return $value;

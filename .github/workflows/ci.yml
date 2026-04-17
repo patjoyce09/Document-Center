@@ -44,6 +44,9 @@ jobs:
           php tests/sample_template_pack_smoke.php
           php tests/uninstall_behavior_helper_smoke.php
           php tests/permissions_matrix_ops_smoke.php
+          php tests/chart_routing_matching_smoke.php
+          php tests/chart_routing_payloads_smoke.php
+          php tests/chart_routing_actions_smoke.php
           php tests/release_version_consistency_smoke.php
           php tests/release_packaging_manifest_smoke.php
           php tests/weekly_digest_payload_smoke.php

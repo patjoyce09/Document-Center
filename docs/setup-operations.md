@@ -40,6 +40,14 @@ The snapshot includes direct links to Setup & Operations, OCR diagnostics/review
 - Use **Intake Trace Timeline** for chain-first trace debugging by `trace_id`.
 - Timeline payload can be extended using `dcb_intake_trace_timeline_payload`.
 
+## Chart Routing Prototype (First EMR-Facing Wedge)
+
+- Chart routing remains generic and connector-boundary-first.
+- Start in **Document Center → Chart Routing Queue** for confidence-tier review before any route/attach action.
+- Modes are controlled with `dcb_chart_routing_mode` (`none_manual`, `api`, `bot`, `report_import`).
+- Weak evidence (especially name-only) must stay in manual review and must not auto-route.
+- Use hooks/adapters for external EMR integration; do not hardcode vendor URLs, selectors, or credentials in core plugin code.
+
 ## Forms Import / Export
 
 - Use Setup & Operations to export forms JSON.
