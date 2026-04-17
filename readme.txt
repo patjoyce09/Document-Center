@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.5
+Stable tag: 0.2.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,17 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.6 =
+* Builder maturity pass: replaced JSON-first schema editing with structured editors for sections, steps/pages, repeaters, hard stops, template blocks, and document nodes.
+* Added field-level condition builder with operator selection, target-field references, and inline validation feedback.
+* Added structured hard-stop rule builder with label, severity/type metadata, and multi-condition rule editing.
+* Added field template quick-insert controls for common inputs, attestation/signature packs, and OCR-friendly identity packs.
+* Added dedicated builder validation panel surfacing duplicate keys, missing labels, broken references, malformed conditions, invalid hard-stop rules, and broken document nodes.
+* Added richer builder preview with steps/sections grouping and document-node output ordering.
+* Added OCR-assisted draft review workbench: extract OCR seed draft, review/edit candidate fields with confidence details, accept/reject rows, and apply accepted draft into builder before save.
+* Preserved schema compatibility and import/export behavior while keeping advanced raw JSON fallback in the Advanced area.
+* Kept OCR extraction service-decoupled and capability-gated (`dcb_run_ocr_tools`) in builder admin actions.
+
 = 0.2.5 =
 * Replaced placeholder read-based permissions with dedicated DCB capabilities and strict permission checks.
 * Hardened admin pages, workflow/admin_post routes, OCR diagnostics/AJAX, renderer export actions, and submission admin surfaces.

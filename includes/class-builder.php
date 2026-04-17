@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 final class DCB_Builder {
     public static function init(): void {
         add_action('admin_post_dcb_save_builder', array(__CLASS__, 'save_builder'));
+        add_action('wp_ajax_dcb_builder_ocr_seed_extract', array(__CLASS__, 'ocr_seed_extract_ajax'));
     }
 
     public static function render_page(): void {
@@ -69,16 +70,94 @@ final class DCB_Builder {
         echo '</details>';
 
         echo '<h3 style="margin-top:16px;">OCR → Draft Form</h3>';
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
+            echo '<p><em>You can edit and save forms, but OCR draft extraction requires additional OCR tool permissions.</em></p>';
+        }
         echo '<table class="form-table"><tbody>';
         echo '<tr><th scope="row"><label for="dcb-ocr-seed-file">Seed File</label></th><td><input type="file" id="dcb-ocr-seed-file" name="ocr_seed_file" accept=".pdf,.txt,.csv,.jpg,.jpeg,.png,.webp,.heic,.heif,.docx" /></td></tr>';
         echo '<tr><th scope="row"><label for="dcb-ocr-form-key">Form Key (optional)</label></th><td><input type="text" id="dcb-ocr-form-key" name="ocr_form_key" class="regular-text" placeholder="wound_assessment_form" /></td></tr>';
         echo '<tr><th scope="row"><label for="dcb-ocr-form-label">Form Label (optional)</label></th><td><input type="text" id="dcb-ocr-form-label" name="ocr_form_label" class="regular-text" placeholder="Wound Assessment Form" /></td></tr>';
         echo '<tr><th scope="row"><label for="dcb-ocr-recipients">Recipients (optional)</label></th><td><input type="text" id="dcb-ocr-recipients" name="ocr_form_recipients" class="large-text" placeholder="team@example.com" /></td></tr>';
+        echo '<tr><th scope="row"></th><td><button type="button" class="button button-secondary" id="dcb-ocr-extract-review">Extract OCR Draft for Review</button><p class="description">Runs OCR extraction without saving. Review candidates, then apply into the builder.</p></td></tr>';
         echo '</tbody></table>';
+
+        echo '<div id="dcb-ocr-review-root" class="dcb-ocr-review-root" data-can-run-ocr="' . esc_attr(DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS) ? '1' : '0') . '" data-ocr-nonce="' . esc_attr(wp_create_nonce('dcb_builder_ocr_seed_extract')) . '"></div>';
 
         submit_button('Save Builder');
         echo '</form>';
         echo '</div>';
+    }
+
+    public static function ocr_seed_extract_ajax(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_FORMS)) {
+            wp_send_json_error(array('message' => 'Unauthorized'), 403);
+        }
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
+            wp_send_json_error(array('message' => 'OCR tools capability is required.'), 403);
+        }
+
+        check_ajax_referer('dcb_builder_ocr_seed_extract', 'nonce');
+
+        if (!isset($_FILES['ocr_seed_file']) || !is_array($_FILES['ocr_seed_file'])) {
+            wp_send_json_error(array('message' => 'Please choose a seed file.'), 422);
+        }
+
+        $seed_file = $_FILES['ocr_seed_file'];
+        $seed_error = (int) ($seed_file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($seed_error !== UPLOAD_ERR_OK) {
+            wp_send_json_error(array('message' => 'OCR seed upload failed.'), 422);
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        $uploaded = wp_handle_upload($seed_file, array('test_form' => false, 'mimes' => dcb_upload_allowed_mimes()));
+        if (!is_array($uploaded) || isset($uploaded['error'])) {
+            wp_send_json_error(array('message' => 'OCR seed upload failed. Please check file type and size.'), 422);
+        }
+
+        $path = (string) ($uploaded['file'] ?? '');
+        $mime = (string) ($uploaded['type'] ?? '');
+        $name = sanitize_file_name((string) ($seed_file['name'] ?? 'scanned-form'));
+        $label = sanitize_text_field((string) ($_POST['ocr_form_label'] ?? ''));
+        if ($label === '') {
+            $label = trim((string) preg_replace('/\.[^.]+$/', '', $name));
+        }
+        if ($label === '') {
+            $label = 'Scanned Form';
+        }
+
+        $form_key = sanitize_key((string) ($_POST['ocr_form_key'] ?? ''));
+        if ($form_key === '') {
+            $form_key = sanitize_key($label);
+        }
+        if ($form_key === '') {
+            $form_key = 'scanned_form_' . gmdate('Ymd_His');
+        }
+
+        $recipients_override = sanitize_text_field((string) ($_POST['ocr_form_recipients'] ?? ''));
+
+        try {
+            $ocr = dcb_upload_extract_text_from_file($path, $mime);
+            $draft = dcb_ocr_to_draft_form((string) ($ocr['text'] ?? ''), $label, $ocr);
+            if ($recipients_override !== '') {
+                $draft['recipients'] = $recipients_override;
+            }
+
+            if ($path !== '' && file_exists($path)) {
+                @unlink($path);
+            }
+
+            wp_send_json_success(array(
+                'form_key' => $form_key,
+                'form_label' => $label,
+                'draft' => dcb_normalize_single_form($draft),
+                'raw_draft' => $draft,
+            ));
+        } catch (\Throwable $e) {
+            if ($path !== '' && file_exists($path)) {
+                @unlink($path);
+            }
+            wp_send_json_error(array('message' => 'OCR extraction failed.'), 500);
+        }
     }
 
     public static function save_builder(): void {

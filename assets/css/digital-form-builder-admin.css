@@ -63,6 +63,18 @@
   min-width: 0;
 }
 
+.dcb-panel {
+  border: 1px solid #d6deeb;
+  border-radius: 10px;
+  background: #fff;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.dcb-panel h3 {
+  margin-top: 0;
+}
+
 .dcb-form-header {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr auto auto;
@@ -81,6 +93,51 @@
   width: 100%;
 }
 
+.dcb-template-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dcb-cond-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.dcb-cond-row {
+  display: grid;
+  grid-template-columns: 1fr 220px 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.dcb-cond-row input,
+.dcb-cond-row select {
+  width: 100%;
+}
+
+.dcb-preview-surface {
+  background: #f8fafc;
+  border: 1px solid #d9e2f0;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.dcb-preview-step {
+  border-left: 4px solid #2271b1;
+  padding-left: 10px;
+  margin-bottom: 10px;
+}
+
+.dcb-preview-section {
+  padding: 6px 0 0 0;
+}
+
+.dcb-ocr-review-root {
+  margin-top: 8px;
+}
+
 .dcb-preview-json {
   max-height: 260px;
   overflow: auto;
@@ -96,4 +153,25 @@
 
 .th-df-builder-root code {
   font-size: 12px;
+}
+
+@media (max-width: 1200px) {
+  .dcb-builder-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .dcb-builder-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #e4ebf5;
+    padding-right: 0;
+    padding-bottom: 12px;
+  }
+
+  .dcb-form-header {
+    grid-template-columns: 1fr;
+  }
+
+  .dcb-cond-row {
+    grid-template-columns: 1fr;
+  }
 }

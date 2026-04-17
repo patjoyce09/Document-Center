@@ -26,7 +26,9 @@ final class DCB_Assets {
         wp_enqueue_style('dcb-builder-admin', DCB_PLUGIN_URL . $css_rel, array(), file_exists(DCB_PLUGIN_DIR . $css_rel) ? (string) filemtime(DCB_PLUGIN_DIR . $css_rel) : DCB_VERSION);
         wp_enqueue_script('dcb-builder-admin', DCB_PLUGIN_URL . $js_rel, array('jquery'), file_exists(DCB_PLUGIN_DIR . $js_rel) ? (string) filemtime(DCB_PLUGIN_DIR . $js_rel) : DCB_VERSION, true);
         wp_localize_script('dcb-builder-admin', 'DCB_DF_BUILDER_ADMIN', array(
+            'ajaxUrl' => admin_url('admin-ajax.php'),
             'fieldTypes' => dcb_allowed_field_types(),
+            'templateBlockTypes' => dcb_allowed_template_block_types(),
             'conditionOperators' => array(
                 'eq' => 'Equals',
                 'neq' => 'Not equals',
@@ -39,6 +41,12 @@ final class DCB_Assets {
                 'lt' => 'Less than',
                 'lte' => 'Less than or equal',
             ),
+            'hardStopSeverities' => array(
+                'error' => 'Error',
+                'warning' => 'Warning',
+                'info' => 'Info',
+            ),
+            'canRunOCRTools' => DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS),
         ));
     }
 

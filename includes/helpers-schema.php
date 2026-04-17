@@ -8,6 +8,10 @@ function dcb_allowed_field_types(): array {
     return array('text', 'email', 'date', 'time', 'number', 'select', 'checkbox', 'radio', 'yes_no');
 }
 
+function dcb_allowed_condition_operators(): array {
+    return array('eq', 'neq', 'filled', 'not_filled', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte');
+}
+
 function dcb_allowed_template_block_types(): array {
     return array('heading', 'paragraph', 'divider', 'section_header', 'spacer', 'image_placeholder', 'info_row', 'labeled_value_row', 'two_column_row');
 }
@@ -55,7 +59,7 @@ function dcb_normalize_options($options): array {
 function dcb_normalize_condition(array $condition): ?array {
     $field = sanitize_key((string) ($condition['field'] ?? ''));
     $operator = sanitize_key((string) ($condition['operator'] ?? 'eq'));
-    $allowed = array('eq', 'neq', 'filled', 'not_filled', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte');
+    $allowed = dcb_allowed_condition_operators();
     if ($field === '' || !in_array($operator, $allowed, true)) {
         return null;
     }
@@ -76,6 +80,50 @@ function dcb_normalize_condition(array $condition): ?array {
     }
 
     return $out;
+}
+
+function dcb_normalize_hard_stop_rule(array $stop): ?array {
+    $message = sanitize_text_field((string) ($stop['message'] ?? ''));
+    $when = isset($stop['when']) && is_array($stop['when']) ? $stop['when'] : array();
+    if ($message === '' || empty($when)) {
+        return null;
+    }
+
+    $clean_when = array();
+    foreach ($when as $condition) {
+        if (!is_array($condition)) {
+            continue;
+        }
+        $clean = dcb_normalize_condition($condition);
+        if ($clean !== null) {
+            $clean_when[] = $clean;
+        }
+    }
+    if (empty($clean_when)) {
+        return null;
+    }
+
+    $normalized = array(
+        'message' => $message,
+        'when' => $clean_when,
+    );
+
+    $label = sanitize_text_field((string) ($stop['label'] ?? $stop['name'] ?? ''));
+    if ($label !== '') {
+        $normalized['label'] = $label;
+    }
+
+    $severity = sanitize_key((string) ($stop['severity'] ?? ''));
+    if (in_array($severity, array('error', 'warning', 'info'), true)) {
+        $normalized['severity'] = $severity;
+    }
+
+    $type = sanitize_key((string) ($stop['type'] ?? $stop['rule_type'] ?? ''));
+    if ($type !== '') {
+        $normalized['type'] = $type;
+    }
+
+    return $normalized;
 }
 
 function dcb_generate_block_id(): string {
@@ -636,23 +684,9 @@ function dcb_normalize_single_form(array $form): ?array {
         if (!is_array($stop)) {
             continue;
         }
-        $message = sanitize_text_field((string) ($stop['message'] ?? ''));
-        $when = isset($stop['when']) && is_array($stop['when']) ? $stop['when'] : array();
-        if ($message === '' || empty($when)) {
-            continue;
-        }
-        $clean_when = array();
-        foreach ($when as $condition) {
-            if (!is_array($condition)) {
-                continue;
-            }
-            $clean = dcb_normalize_condition($condition);
-            if ($clean !== null) {
-                $clean_when[] = $clean;
-            }
-        }
-        if (!empty($clean_when)) {
-            $normalized_hard_stops[] = array('message' => $message, 'when' => $clean_when);
+        $clean_stop = dcb_normalize_hard_stop_rule($stop);
+        if ($clean_stop !== null) {
+            $normalized_hard_stops[] = $clean_stop;
         }
     }
 
@@ -792,21 +826,10 @@ function dcb_structural_signature_payload(array $form): array {
         if (!is_array($stop)) {
             continue;
         }
-        $message = sanitize_text_field((string) ($stop['message'] ?? ''));
-        $when = array();
-        foreach ((array) ($stop['when'] ?? array()) as $condition) {
-            if (!is_array($condition)) {
-                continue;
-            }
-            $clean = dcb_normalize_condition($condition);
-            if ($clean !== null) {
-                $when[] = $clean;
-            }
+        $clean_stop = dcb_normalize_hard_stop_rule($stop);
+        if ($clean_stop !== null) {
+            $clean_hard_stops[] = $clean_stop;
         }
-        if ($message === '' || empty($when)) {
-            continue;
-        }
-        $clean_hard_stops[] = array('message' => $message, 'when' => $when);
     }
 
     $clean_document_nodes = dcb_normalize_document_nodes($form['document_nodes'] ?? array(), $clean_blocks, $clean_fields);
@@ -985,11 +1008,12 @@ function dcb_apply_generic_hard_stops(array $form, array $clean, array $raw): ar
         if (!is_array($stop)) {
             continue;
         }
-        $message = sanitize_text_field((string) ($stop['message'] ?? ''));
-        $when = isset($stop['when']) && is_array($stop['when']) ? $stop['when'] : array();
-        if ($message === '' || empty($when)) {
+        $normalized_stop = dcb_normalize_hard_stop_rule($stop);
+        if ($normalized_stop === null) {
             continue;
         }
+        $message = sanitize_text_field((string) ($normalized_stop['message'] ?? ''));
+        $when = isset($normalized_stop['when']) && is_array($normalized_stop['when']) ? $normalized_stop['when'] : array();
         $matched = true;
         foreach ($when as $condition) {
             if (is_array($condition) && !dcb_condition_matches($condition, $values)) {
@@ -1003,6 +1027,223 @@ function dcb_apply_generic_hard_stops(array $form, array $clean, array $raw): ar
     }
 
     return $errors;
+}
+
+function dcb_builder_validate_form_schema(array $form): array {
+    $errors = array();
+    $warnings = array();
+
+    $fields = isset($form['fields']) && is_array($form['fields']) ? $form['fields'] : array();
+    $sections = isset($form['sections']) && is_array($form['sections']) ? $form['sections'] : array();
+    $steps = isset($form['steps']) && is_array($form['steps']) ? $form['steps'] : array();
+    $repeaters = isset($form['repeaters']) && is_array($form['repeaters']) ? $form['repeaters'] : array();
+    $template_blocks = isset($form['template_blocks']) && is_array($form['template_blocks']) ? $form['template_blocks'] : array();
+    $document_nodes = isset($form['document_nodes']) && is_array($form['document_nodes']) ? $form['document_nodes'] : array();
+    $hard_stops = isset($form['hard_stops']) && is_array($form['hard_stops']) ? $form['hard_stops'] : array();
+
+    $field_key_counts = array();
+    foreach ($fields as $index => $field) {
+        if (!is_array($field)) {
+            $warnings[] = sprintf('Field row #%d is not an object.', $index + 1);
+            continue;
+        }
+        $key = sanitize_key((string) ($field['key'] ?? ''));
+        $label = sanitize_text_field((string) ($field['label'] ?? ''));
+        if ($key === '') {
+            $errors[] = sprintf('Field row #%d is missing key.', $index + 1);
+            continue;
+        }
+        if ($label === '') {
+            $errors[] = sprintf('Field "%s" is missing label.', $key);
+        }
+        $field_key_counts[$key] = isset($field_key_counts[$key]) ? ((int) $field_key_counts[$key] + 1) : 1;
+
+        $conditions = isset($field['conditions']) && is_array($field['conditions']) ? $field['conditions'] : array();
+        foreach ($conditions as $cond_idx => $condition) {
+            if (!is_array($condition) || dcb_normalize_condition($condition) === null) {
+                $errors[] = sprintf('Field "%s" has invalid condition #%d.', $key, $cond_idx + 1);
+            }
+        }
+    }
+
+    foreach ($field_key_counts as $key => $count) {
+        if ((int) $count > 1) {
+            $errors[] = sprintf('Duplicate field key "%s".', $key);
+        }
+    }
+
+    $field_key_set = array_fill_keys(array_keys($field_key_counts), true);
+
+    $section_key_counts = array();
+    foreach ($sections as $idx => $section) {
+        if (!is_array($section)) {
+            $warnings[] = sprintf('Section row #%d is not an object.', $idx + 1);
+            continue;
+        }
+        $key = sanitize_key((string) ($section['key'] ?? ''));
+        if ($key === '') {
+            $errors[] = sprintf('Section row #%d is missing key.', $idx + 1);
+            continue;
+        }
+        $section_key_counts[$key] = isset($section_key_counts[$key]) ? ((int) $section_key_counts[$key] + 1) : 1;
+
+        foreach ((array) ($section['field_keys'] ?? array()) as $field_key) {
+            $field_key = sanitize_key((string) $field_key);
+            if ($field_key === '' || !isset($field_key_set[$field_key])) {
+                $errors[] = sprintf('Section "%s" references missing field "%s".', $key, $field_key);
+            }
+        }
+    }
+
+    foreach ($section_key_counts as $key => $count) {
+        if ((int) $count > 1) {
+            $warnings[] = sprintf('Duplicate section key "%s".', $key);
+        }
+    }
+
+    $section_key_set = array_fill_keys(array_keys($section_key_counts), true);
+    foreach ($steps as $idx => $step) {
+        if (!is_array($step)) {
+            $warnings[] = sprintf('Step row #%d is not an object.', $idx + 1);
+            continue;
+        }
+        $key = sanitize_key((string) ($step['key'] ?? ''));
+        if ($key === '') {
+            $errors[] = sprintf('Step row #%d is missing key.', $idx + 1);
+            continue;
+        }
+        foreach ((array) ($step['section_keys'] ?? array()) as $section_key) {
+            $section_key = sanitize_key((string) $section_key);
+            if ($section_key === '' || !isset($section_key_set[$section_key])) {
+                $errors[] = sprintf('Step "%s" references missing section "%s".', $key, $section_key);
+            }
+        }
+    }
+
+    foreach ($repeaters as $idx => $repeater) {
+        if (!is_array($repeater)) {
+            $warnings[] = sprintf('Repeater row #%d is not an object.', $idx + 1);
+            continue;
+        }
+        $key = sanitize_key((string) ($repeater['key'] ?? ''));
+        if ($key === '') {
+            $errors[] = sprintf('Repeater row #%d is missing key.', $idx + 1);
+            continue;
+        }
+        foreach ((array) ($repeater['field_keys'] ?? array()) as $field_key) {
+            $field_key = sanitize_key((string) $field_key);
+            if ($field_key === '' || !isset($field_key_set[$field_key])) {
+                $errors[] = sprintf('Repeater "%s" references missing field "%s".', $key, $field_key);
+            }
+        }
+    }
+
+    foreach ($hard_stops as $idx => $stop) {
+        if (!is_array($stop) || dcb_normalize_hard_stop_rule($stop) === null) {
+            $errors[] = sprintf('Hard stop row #%d is invalid.', $idx + 1);
+        }
+    }
+
+    $block_ids = array();
+    foreach ($template_blocks as $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $block_id = sanitize_key((string) ($block['block_id'] ?? ''));
+        if ($block_id !== '') {
+            $block_ids[$block_id] = true;
+        }
+    }
+
+    foreach ($document_nodes as $idx => $node) {
+        if (!is_array($node)) {
+            $errors[] = sprintf('Document node row #%d is invalid.', $idx + 1);
+            continue;
+        }
+        $type = sanitize_key((string) ($node['type'] ?? ''));
+        if ($type === 'field') {
+            $field_key = sanitize_key((string) ($node['field_key'] ?? ''));
+            if ($field_key === '' || !isset($field_key_set[$field_key])) {
+                $errors[] = sprintf('Document node #%d references missing field "%s".', $idx + 1, $field_key);
+            }
+            continue;
+        }
+        if ($type === 'block') {
+            $block_id = sanitize_key((string) ($node['block_id'] ?? ''));
+            if ($block_id === '' || !isset($block_ids[$block_id])) {
+                $errors[] = sprintf('Document node #%d references missing block "%s".', $idx + 1, $block_id);
+            }
+            continue;
+        }
+        $errors[] = sprintf('Document node #%d has invalid type "%s".', $idx + 1, $type);
+    }
+
+    return array(
+        'errors' => array_values(array_unique(array_filter($errors))),
+        'warnings' => array_values(array_unique(array_filter($warnings))),
+    );
+}
+
+function dcb_apply_ocr_candidate_review(array $draft_form, array $review_rows): array {
+    $normalized_rows = dcb_normalize_ocr_candidates($review_rows);
+    if (empty($normalized_rows)) {
+        return $draft_form;
+    }
+
+    $accepted = array();
+    foreach ($normalized_rows as $index => $candidate) {
+        if (!is_array($candidate)) {
+            continue;
+        }
+        $raw_row = isset($review_rows[$index]) && is_array($review_rows[$index]) ? $review_rows[$index] : array();
+        $decision = sanitize_key((string) ($raw_row['decision'] ?? 'accept'));
+        if ($decision === 'reject') {
+            continue;
+        }
+        $accepted[] = $candidate;
+    }
+
+    $fields = array();
+    foreach ($accepted as $candidate) {
+        $key = sanitize_key((string) ($candidate['suggested_key'] ?? ''));
+        $label = sanitize_text_field((string) ($candidate['field_label'] ?? ''));
+        if ($key === '' || $label === '') {
+            continue;
+        }
+        $type = sanitize_key((string) ($candidate['suggested_type'] ?? 'text'));
+        if (!in_array($type, dcb_allowed_field_types(), true)) {
+            $type = 'text';
+        }
+        $fields[] = array(
+            'key' => $key,
+            'label' => $label,
+            'type' => $type,
+            'required' => !empty($candidate['required_guess']),
+            'ocr_meta' => array(
+                'page_number' => max(1, (int) ($candidate['page_number'] ?? 1)),
+                'source_text_snippet' => sanitize_text_field((string) ($candidate['source_text_snippet'] ?? '')),
+                'confidence_bucket' => sanitize_key((string) ($candidate['confidence_bucket'] ?? 'low')),
+                'confidence_score' => round(max(0, min(1, (float) ($candidate['confidence_score'] ?? 0))), 4),
+                'suggested_type' => $type,
+                'source_engine' => sanitize_key((string) ($candidate['source_engine'] ?? '')),
+                'warning_state' => sanitize_key((string) ($candidate['warning_state'] ?? 'none')),
+                'review_state' => 'confirmed',
+            ),
+        );
+    }
+
+    if (!empty($fields)) {
+        $draft_form['fields'] = $fields;
+    }
+
+    $draft_form['ocr_candidates'] = $normalized_rows;
+    if (!isset($draft_form['ocr_review']) || !is_array($draft_form['ocr_review'])) {
+        $draft_form['ocr_review'] = array();
+    }
+    $draft_form['ocr_review']['accepted_count'] = count($fields);
+    $draft_form['ocr_review']['reviewed_count'] = count($normalized_rows);
+
+    return $draft_form;
 }
 
 function dcb_validate_value(array $field, $value): array {
