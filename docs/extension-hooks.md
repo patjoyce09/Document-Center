@@ -176,6 +176,13 @@ Filter user-facing resource center payload (rows + summary) before upload portal
 2. `$user_id` (`int`)
 3. `$forms` (`array`)
 
+### `dcb_intake_trace_timeline_payload`
+Filter assembled intake trace timeline payload before admin timeline rendering.
+
+**Arguments**
+1. `$timeline_payload` (`array`)
+2. `$raw_payload` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`

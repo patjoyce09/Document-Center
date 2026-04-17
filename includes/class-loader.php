@@ -19,6 +19,7 @@ require_once DCB_PLUGIN_DIR . 'includes/class-uploader.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-diagnostics.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-workflow.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-integration-tutor.php';
+require_once DCB_PLUGIN_DIR . 'includes/class-intake-trace.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-migrations.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-cli.php';
 
@@ -56,6 +57,7 @@ final class DCB_Loader {
         DCB_Diagnostics::init();
         DCB_Workflow::init();
         DCB_Integration_Tutor::init();
+        DCB_Intake_Trace::init();
         DCB_Migrations::run();
         DCB_CLI::init();
     }

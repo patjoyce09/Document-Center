@@ -36,6 +36,8 @@ jobs:
           php tests/resource_center_status_model_smoke.php
           php tests/intake_status_payload_smoke.php
           php tests/admin_traceability_helpers_smoke.php
+          php tests/intake_trace_timeline_payload_smoke.php
+          php tests/intake_trace_admin_links_smoke.php
           php tests/output_signatures_smoke.php
           php tests/tutor_integration_smoke.php
 

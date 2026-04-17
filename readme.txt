@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.6
+Stable tag: 0.3.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,13 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.7 =
+* Added dedicated Intake Trace Timeline admin screen keyed by `trace_id` for single-chain visibility from upload artifact through OCR review and submission workflow status.
+* Added reusable timeline helper payload layer (`dcb_intake_trace_build_payload`, linked-id resolver, state summary, event builder, admin URL helper).
+* Added timeline row action links from upload artifacts, OCR review queue, and submissions admin lists.
+* Added new extension hook `dcb_intake_trace_timeline_payload` for timeline payload customization.
+* Added smoke tests for timeline payload helpers, capability-gated timeline access, and trace row-action link generation.
+
 = 0.3.6 =
 * Added normalized intake channel model (`direct_upload`, `phone_photo`, `scanned_pdf`, `email_import`, `digital_only`) with channel adapter handling in upload + submission flows.
 * Added stronger original-capture traceability metadata chain across upload artifact, OCR review item, and submission (`trace_id`, source/capture type, linked review/submission IDs, intake state).
