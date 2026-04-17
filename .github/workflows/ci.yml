@@ -28,6 +28,7 @@ jobs:
           php tests/ocr_operations_smoke.php
           php tests/ocr_quality_benchmark_smoke.php
           php tests/ocr_realworld_benchmark_smoke.php
+          php tests/ocr_local_replay_runner.php --json
           php tests/output_signatures_smoke.php
           php tests/tutor_integration_smoke.php
 

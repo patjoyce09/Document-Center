@@ -135,6 +135,15 @@ Filter full OCR input normalization result payload.
 2. `$inspection` (`array`)
 3. `$file_path` (`string`)
 
+### `dcb_ocr_input_normalization_stage_counts`
+Filter accumulated normalization stage attempt/application counts per replay page.
+
+**Arguments**
+1. `$stage_application_counts` (`array`)
+2. `$stage_attempt_counts` (`array`)
+3. `$page_meta` (`array`)
+4. `$inspection` (`array`)
+
 ### `dcb_ocr_digital_twin_hints`
 Filter lightweight digital twin render/layout hints produced for OCR-generated drafts.
 
@@ -142,6 +151,15 @@ Filter lightweight digital twin render/layout hints produced for OCR-generated d
 1. `$hints` (`array`)
 2. `$document_model` (`array`)
 3. `$fields` (`array`)
+
+### `dcb_ocr_local_replay_diagnostics`
+Filter local replay before/after diagnostics payload used by replay runner and benchmark triage flows.
+
+**Arguments**
+1. `$diagnostics` (`array`)
+2. `$file_path` (`string`)
+3. `$mime` (`string`)
+4. `$inspection` (`array`)
 
 ## Actions
 

@@ -611,7 +611,30 @@ function dcb_normalize_ocr_review($review): array {
             'max_dimension' => max(0, (int) ($norm['max_dimension'] ?? 0)),
             'stages' => isset($norm['stages']) && is_array($norm['stages']) ? array_values(array_filter(array_map('sanitize_key', $norm['stages']))) : array(),
             'page_count' => max(0, (int) ($norm['page_count'] ?? 0)),
+            'average_warning_count' => round(max(0.0, (float) ($norm['average_warning_count'] ?? 0.0)), 4),
+            'normalization_improvement_proxy' => round(max(0.0, min(1.0, (float) ($norm['normalization_improvement_proxy'] ?? 0.0))), 4),
+            'rasterization_coverage' => round(max(0.0, min(1.0, (float) ($norm['rasterization_coverage'] ?? 0.0))), 4),
         );
+        if (isset($norm['warnings']) && is_array($norm['warnings'])) {
+            $out['input_normalization']['warnings'] = array_values(array_filter(array_map(static function ($row) {
+                if (!is_array($row)) {
+                    return null;
+                }
+                return array(
+                    'code' => sanitize_key((string) ($row['code'] ?? 'capture_warning')),
+                    'message' => sanitize_text_field((string) ($row['message'] ?? 'Capture warning.')),
+                );
+            }, $norm['warnings'])));
+        }
+        if (isset($norm['capture_recommendations']) && is_array($norm['capture_recommendations'])) {
+            $out['input_normalization']['capture_recommendations'] = array_values(array_filter(array_map('sanitize_text_field', $norm['capture_recommendations'])));
+        }
+        if (isset($norm['stage_application_counts']) && is_array($norm['stage_application_counts'])) {
+            $out['input_normalization']['stage_application_counts'] = array_map('intval', $norm['stage_application_counts']);
+        }
+        if (isset($norm['stage_attempt_counts']) && is_array($norm['stage_attempt_counts'])) {
+            $out['input_normalization']['stage_attempt_counts'] = array_map('intval', $norm['stage_attempt_counts']);
+        }
     }
 
     if (isset($review['page_extraction']) && is_array($review['page_extraction'])) {
@@ -631,6 +654,9 @@ function dcb_normalize_ocr_review($review): array {
                 'text_length' => max(0, (int) ($row['text_length'] ?? 0)),
                 'confidence_proxy' => $proxy,
                 'confidence_bucket' => $bucket,
+                'normalization_processor' => sanitize_key((string) ($row['normalization_processor'] ?? 'none')),
+                'capture_warning_count' => max(0, (int) ($row['capture_warning_count'] ?? 0)),
+                'dimension_reduction_ratio' => round(max(0.0, min(1.0, (float) ($row['dimension_reduction_ratio'] ?? 0.0))), 4),
             );
         }
         if (!empty($page_rows)) {
@@ -872,6 +898,21 @@ function dcb_normalize_single_form(array $form): ?array {
     $digital_twin_hints = dcb_normalize_digital_twin_hints($form['digital_twin_hints'] ?? array());
     if (!empty($digital_twin_hints)) {
         $normalized_form['digital_twin_hints'] = $digital_twin_hints;
+    }
+
+    if (isset($form['source_capture_meta']) && is_array($form['source_capture_meta'])) {
+        $meta = (array) $form['source_capture_meta'];
+        $normalized_form['source_capture_meta'] = array(
+            'input_source_type' => sanitize_key((string) ($meta['input_source_type'] ?? 'unknown')),
+            'capture_warning_count' => max(0, (int) ($meta['capture_warning_count'] ?? 0)),
+            'normalization_improvement_proxy' => round(max(0.0, min(1.0, (float) ($meta['normalization_improvement_proxy'] ?? 0.0))), 4),
+        );
+        if (isset($meta['capture_recommendations']) && is_array($meta['capture_recommendations'])) {
+            $normalized_form['source_capture_meta']['capture_recommendations'] = array_values(array_filter(array_map('sanitize_text_field', $meta['capture_recommendations'])));
+        }
+        if (isset($meta['normalization_stage_application_counts']) && is_array($meta['normalization_stage_application_counts'])) {
+            $normalized_form['source_capture_meta']['normalization_stage_application_counts'] = array_map('intval', $meta['normalization_stage_application_counts']);
+        }
     }
 
     return $normalized_form;

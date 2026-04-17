@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.2
+Stable tag: 0.3.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,25 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.4 =
+* Added local replay runner utility (`tests/ocr_local_replay_runner.php`) for operational fixture replay with text fallback and optional local binary support.
+* Added before/after normalization diagnostics with text-length/confidence/warning deltas and per-stage attempt/application counts.
+* Added unresolved capture-risk reporting and practical local triage summaries with optional JSON artifact export.
+* Added reusable local replay diagnostics helper (`dcb_ocr_local_replay_before_after_diagnostics`) and hook (`dcb_ocr_local_replay_diagnostics`).
+* Expanded real-world benchmark reporting with average confidence/warning/text-length deltas and unresolved capture-risk case count.
+* Improved capture-quality risk heuristics and recommendations (dark/low-contrast/rotation-skew/crop-border/rasterization coverage warnings).
+* Persisted source-capture metadata on OCR review queue items for later admin triage surfaces.
+
+= 0.3.3 =
+* Added actual binary replay path in real-world OCR benchmark smoke tests when local PDF/photo binaries are available, with clean fallback to sample text fixtures.
+* Added per-case normalization diagnostics output for orientation/deskew/crop/contrast/max-dimension stage attempt/application and capture warning summaries.
+* Added practical capture-quality heuristics for low-resolution, low-contrast, dark-image, rotation/skew-risk, and crop/border-risk detection.
+* Added normalization effectiveness proxies (`normalization_improvement_proxy`, stage application counts, rasterization coverage, average capture warning count).
+* Added capture-quality recommendations metadata in OCR normalization output for future admin/review UI surfacing.
+* Improved real-input candidate scoring using normalization and capture-warning metadata while preserving builder compatibility.
+* Added draft-level `source_capture_meta` and richer OCR review metadata for replay diagnostics and digital-twin fidelity continuity.
+* Extended real-world fixture manifest with optional `required_local_binary` flag.
+
 = 0.3.2 =
 * Added OCR input normalization pipeline stages for orientation correction, deskew, crop/border cleanup, contrast cleanup, PDF raster-page normalization, and max-dimension normalization.
 * Added lightweight capture-quality metadata and warnings for low-resolution/photo-risk inputs.

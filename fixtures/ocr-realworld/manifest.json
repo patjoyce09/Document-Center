@@ -1,5 +1,5 @@
 {
-  "fixture_version": "1.0",
+  "fixture_version": "1.1",
   "notes": "Lightweight real-world OCR benchmark interface. Binary samples can be added locally without committing large files.",
   "cases": [
     {
@@ -8,6 +8,7 @@
       "source_type": "pdf",
       "sample_path": "fixtures/ocr-realworld/scanned_pdf_sample.txt",
       "optional_binary_path": "fixtures/ocr-realworld/local/scanned_pdf_intake.pdf",
+      "required_local_binary": false,
       "expected": {
         "fields": [
           { "key": "patient_name", "type": "text" },
@@ -26,6 +27,7 @@
       "source_type": "photo",
       "sample_path": "fixtures/ocr-realworld/phone_photo_sample.txt",
       "optional_binary_path": "fixtures/ocr-realworld/local/phone_photo_registration.jpg",
+      "required_local_binary": false,
       "expected": {
         "fields": [
           { "key": "full_name", "type": "text" },
@@ -44,6 +46,7 @@
       "source_type": "photo",
       "sample_path": "fixtures/ocr-realworld/rotated_skewed_sample.txt",
       "optional_binary_path": "fixtures/ocr-realworld/local/rotated_skewed_page.jpg",
+      "required_local_binary": false,
       "expected": {
         "fields": [
           { "key": "member_id", "type": "number" },
@@ -61,6 +64,7 @@
       "source_type": "photo",
       "sample_path": "fixtures/ocr-realworld/low_contrast_noisy_sample.txt",
       "optional_binary_path": "fixtures/ocr-realworld/local/low_contrast_noisy.jpg",
+      "required_local_binary": false,
       "expected": {
         "fields": [
           { "key": "claim_number", "type": "number" },
@@ -78,6 +82,7 @@
       "source_type": "pdf",
       "sample_path": "fixtures/ocr-realworld/multi_page_packet_sample.txt",
       "optional_binary_path": "fixtures/ocr-realworld/local/multi_page_packet.pdf",
+      "required_local_binary": false,
       "expected": {
         "fields": [
           { "key": "patient_name", "type": "text" },
