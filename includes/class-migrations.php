@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class DCB_Migrations {
     private const OPTION_KEY = 'dcb_schema_version';
-    private const TARGET_VERSION = 8;
+    private const TARGET_VERSION = 9;
 
     public static function activate(): void {
         self::run();
@@ -119,6 +119,13 @@ final class DCB_Migrations {
             }
             if (get_option('dcb_chart_routing_last_connector_validation', null) === null) {
                 add_option('dcb_chart_routing_last_connector_validation', array(), '', false);
+            }
+            return;
+        }
+
+        if ($version === 9) {
+            if (get_option('dcb_chart_routing_event_log', null) === null) {
+                add_option('dcb_chart_routing_event_log', array(), '', false);
             }
         }
     }

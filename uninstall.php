@@ -48,6 +48,7 @@ $option_keys = array(
     'dcb_chart_routing_require_confirmation',
     'dcb_chart_routing_max_retry_attempts',
     'dcb_chart_routing_last_connector_validation',
+    'dcb_chart_routing_event_log',
     'dcb_tutor_integration_enabled',
     'dcb_tutor_mapping',
     'dcb_uninstall_remove_data',

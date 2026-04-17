@@ -293,6 +293,12 @@ Validate API/Bot connector config payload.
 2. `$mode` (`string`)
 3. `$config` (`array`)
 
+### `dcb_chart_routing_connector_event`
+Action emitted after PHI-safe connector event log entries are persisted.
+
+**Arguments**
+1. `$event` (`array`)
+
 ### `dcb_chart_routing_connector_config_display`
 Filter public chart-routing connector config before admin display (secrets already stripped).
 

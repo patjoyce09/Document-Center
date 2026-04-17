@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.10
+Stable tag: 0.3.11
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -54,6 +54,14 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.11 =
+* Added async retry boundary for chart-routing attach flow with bounded exponential backoff and scheduled retry queue payload metadata.
+* Added dead-letter terminal state (`retry_exhausted`) and explicit queue status (`route_retry_exhausted`) when retry budget is exhausted.
+* Added PHI-safe structured connector event logs (`connector_validation`, `retry_queued`, `retry_succeeded`, `retry_exhausted`, `attach_succeeded`) with compact admin observability.
+* Added compact queue-row observability for next retry and dead-letter timestamps.
+* Added injected-adapter harness smoke test covering success, temporary fail-then-success, and permanent-fail paths without vendor lock-in.
+* Added smoke test coverage for PHI-safe event log payload shaping and updated retry-state expectations.
+
 = 0.3.10 =
 * Added real connector package skeleton under `providers/real-connector-skeleton` using hook-based adapter injection (`api` mode + provider key) without vendor lock-in in core classes.
 * Added secure chart-routing config boundary separating public connector config from sealed secret storage with masked admin display.

@@ -51,6 +51,9 @@ The snapshot includes direct links to Setup & Operations, OCR diagnostics/review
 - Keep connector secret/token in the secure secret boundary (masked in UI; not echoed raw).
 - Use **Test Connector Readiness** in Chart Routing Queue to validate config safely.
 - Route/attach observability now tracks result state, retry count, failure reason, and timestamps.
+- Failed attach attempts now use bounded async retries with exponential backoff and queue-level next-retry metadata.
+- Terminal retry state is `retry_exhausted` (dead-letter boundary) to prevent unbounded retry loops.
+- Recent connector events shown in admin are PHI-safe (`connector_validation`, `retry_queued`, `retry_succeeded`, `retry_exhausted`, `attach_succeeded`).
 
 ## Forms Import / Export
 

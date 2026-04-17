@@ -50,6 +50,8 @@ jobs:
           php tests/chart_routing_secure_config_smoke.php
           php tests/chart_routing_connector_validation_smoke.php
           php tests/chart_routing_retry_state_smoke.php
+          php tests/chart_routing_event_log_payload_smoke.php
+          php tests/chart_routing_injected_adapter_harness_smoke.php
           php tests/chart_routing_connector_test_capability_smoke.php
           php tests/release_version_consistency_smoke.php
           php tests/release_packaging_manifest_smoke.php

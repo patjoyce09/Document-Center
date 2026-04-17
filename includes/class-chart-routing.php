@@ -6,12 +6,14 @@ if (!defined('ABSPATH')) {
 
 final class DCB_Chart_Routing {
     private const POST_TYPE = 'dcb_chart_route_queue';
+    private const RETRY_HOOK = 'dcb_chart_routing_retry_attach';
 
     public static function init(): void {
         add_action('init', array(__CLASS__, 'register_post_type'), 22);
         add_action('admin_menu', array(__CLASS__, 'register_admin_page'));
         add_action('admin_post_dcb_chart_routing_action', array(__CLASS__, 'handle_queue_action'));
         add_action('admin_post_dcb_chart_routing_test_connector', array(__CLASS__, 'handle_test_connector'));
+        add_action(self::RETRY_HOOK, array(__CLASS__, 'handle_scheduled_retry'), 10, 1);
         add_action('dcb_upload_artifact_logged', array(__CLASS__, 'handle_upload_artifact_logged'), 10, 2);
         add_action('dcb_ocr_review_status_changed', array(__CLASS__, 'handle_ocr_review_status_changed'), 20, 4);
     }
@@ -324,6 +326,34 @@ final class DCB_Chart_Routing {
             echo '</form>';
         }
 
+        $event_log = get_option('dcb_chart_routing_event_log', array());
+        if (!is_array($event_log)) {
+            $event_log = array();
+        }
+        $event_log = array_slice($event_log, -5);
+        if (!empty($event_log)) {
+            echo '<h3 style="margin-top:8px">Recent Connector Events (PHI-safe)</h3>';
+            echo '<ul style="margin-top:4px">';
+            foreach ($event_log as $event_row) {
+                if (!is_array($event_row)) {
+                    continue;
+                }
+                $event_name = sanitize_key((string) ($event_row['event'] ?? 'connector_event'));
+                $event_time = sanitize_text_field((string) ($event_row['time'] ?? ''));
+                $event_state = sanitize_key((string) ($event_row['state'] ?? ''));
+                $event_message = sanitize_text_field((string) ($event_row['message'] ?? ''));
+                echo '<li><strong>' . esc_html($event_name) . '</strong> ';
+                if ($event_state !== '') {
+                    echo '(' . esc_html($event_state) . ') ';
+                }
+                if ($event_time !== '') {
+                    echo '@ ' . esc_html($event_time) . ' — ';
+                }
+                echo esc_html($event_message) . '</li>';
+            }
+            echo '</ul>';
+        }
+
         echo '<table class="widefat striped"><thead><tr>';
         echo '<th style="width:65px">Queue ID</th>';
         echo '<th style="width:180px">Artifact / Trace</th>';
@@ -360,6 +390,8 @@ final class DCB_Chart_Routing {
             $retry_count = max(0, (int) get_post_meta($queue_id, '_dcb_chart_route_retry_count', true));
             $failure_reason = sanitize_key((string) get_post_meta($queue_id, '_dcb_chart_route_last_failure_reason', true));
             $last_attempt_at = sanitize_text_field((string) get_post_meta($queue_id, '_dcb_chart_route_last_attempt_at', true));
+            $next_retry_at = sanitize_text_field((string) get_post_meta($queue_id, '_dcb_chart_route_next_retry_at', true));
+            $retry_exhausted_at = sanitize_text_field((string) get_post_meta($queue_id, '_dcb_chart_route_retry_exhausted_at', true));
 
             $artifact_name = sanitize_text_field((string) get_post_meta($upload_log_id, '_dcb_upload_title', true));
             $artifact_link = $upload_log_id > 0 ? admin_url('post.php?post=' . $upload_log_id . '&action=edit') : '';
@@ -381,7 +413,10 @@ final class DCB_Chart_Routing {
             echo '<td>' . esc_html((string) (dcb_chart_routing_document_types()[$doc_type_key] ?? 'Miscellaneous')) . '</td>';
             echo '<td>' . esc_html(ucwords(str_replace('_', ' ', $status)));
             if ($last_state !== '') {
-                echo '<br /><small>Result: ' . esc_html($last_state) . '</small>';
+                $state_label = function_exists('dcb_chart_routing_result_state_label')
+                    ? dcb_chart_routing_result_state_label($last_state)
+                    : ucwords(str_replace('_', ' ', $last_state));
+                echo '<br /><small>Result: ' . esc_html($state_label) . '</small>';
             }
             if ($retry_count > 0) {
                 echo '<br /><small>Retries: ' . esc_html((string) $retry_count) . '</small>';
@@ -391,6 +426,12 @@ final class DCB_Chart_Routing {
             }
             if ($last_attempt_at !== '') {
                 echo '<br /><small>Last Try: ' . esc_html($last_attempt_at) . '</small>';
+            }
+            if ($next_retry_at !== '') {
+                echo '<br /><small>Next Retry: ' . esc_html($next_retry_at) . '</small>';
+            }
+            if ($retry_exhausted_at !== '') {
+                echo '<br /><small>Dead-Lettered: ' . esc_html($retry_exhausted_at) . '</small>';
             }
             echo '</td>';
 
@@ -436,6 +477,20 @@ final class DCB_Chart_Routing {
             : $validation_raw;
 
         update_option('dcb_chart_routing_last_connector_validation', $validation, false);
+        self::log_connector_event(array(
+            'event' => 'connector_validation',
+            'queue_id' => 0,
+            'trace_id' => '',
+            'connector_mode' => $mode,
+            'provider_key' => sanitize_key((string) ($config['provider_key'] ?? '')),
+            'state' => !empty($validation['ok']) ? 'ready' : 'not_ready',
+            'failure_reason' => !empty($validation['ok']) ? '' : 'validation_failed',
+            'message' => !empty($validation['ok']) ? 'Connector validation passed.' : 'Connector validation reported issues.',
+            'context' => array(
+                'error_count' => (string) count((array) ($validation['errors'] ?? array())),
+                'warning_count' => (string) count((array) ($validation['warnings'] ?? array())),
+            ),
+        ));
 
         $notice = !empty($validation['ok'])
             ? 'Connector readiness test passed.'
@@ -448,6 +503,245 @@ final class DCB_Chart_Routing {
         }
         wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
         exit;
+    }
+
+    private static function append_event_log(array $event): void {
+        $rows = get_option('dcb_chart_routing_event_log', array());
+        if (!is_array($rows)) {
+            $rows = array();
+        }
+
+        $rows[] = $event;
+        if (count($rows) > 300) {
+            $rows = array_slice($rows, -300);
+        }
+
+        update_option('dcb_chart_routing_event_log', $rows, false);
+    }
+
+    private static function log_connector_event(array $payload): array {
+        $event = function_exists('dcb_chart_routing_event_log_payload_shape')
+            ? dcb_chart_routing_event_log_payload_shape($payload)
+            : $payload;
+
+        self::append_event_log($event);
+
+        if (function_exists('do_action')) {
+            do_action('dcb_chart_routing_connector_event', $event);
+        }
+
+        return $event;
+    }
+
+    private static function queue_async_retry(int $queue_id, string $trace_id, int $retry_count, int $max_retry, string $failure_reason): array {
+        $retry_count = max(1, $retry_count);
+        $max_retry = max(1, $max_retry);
+        $backoff_seconds = function_exists('dcb_chart_routing_retry_backoff_seconds')
+            ? dcb_chart_routing_retry_backoff_seconds($retry_count)
+            : 60;
+        $scheduled_ts = time() + $backoff_seconds;
+        $next_retry_at = function_exists('wp_date') ? wp_date('Y-m-d H:i:s', $scheduled_ts) : gmdate('Y-m-d H:i:s', $scheduled_ts);
+
+        update_post_meta($queue_id, '_dcb_chart_route_next_retry_at', $next_retry_at);
+
+        $scheduled = false;
+        if (function_exists('wp_schedule_single_event') && function_exists('wp_next_scheduled')) {
+            $existing = wp_next_scheduled(self::RETRY_HOOK, array($queue_id));
+            if (empty($existing)) {
+                $scheduled = (bool) wp_schedule_single_event($scheduled_ts, self::RETRY_HOOK, array($queue_id));
+            } else {
+                $scheduled = true;
+            }
+        }
+
+        $retry_payload = function_exists('dcb_chart_routing_retry_payload_shape')
+            ? dcb_chart_routing_retry_payload_shape(array(
+                'queue_id' => $queue_id,
+                'trace_id' => $trace_id,
+                'state' => 'retry_pending',
+                'retry_count' => $retry_count,
+                'max_retry' => $max_retry,
+                'backoff_seconds' => $backoff_seconds,
+                'next_retry_at' => $next_retry_at,
+                'last_failure_reason' => $failure_reason,
+                'updated_at' => current_time('mysql'),
+            ))
+            : array();
+
+        update_post_meta($queue_id, '_dcb_chart_route_retry_payload', $retry_payload);
+
+        self::log_connector_event(array(
+            'event' => 'retry_queued',
+            'queue_id' => $queue_id,
+            'trace_id' => $trace_id,
+            'connector_mode' => self::connector_mode(),
+            'provider_key' => sanitize_key((string) ((function_exists('dcb_chart_routing_resolved_connector_config') ? dcb_chart_routing_resolved_connector_config() : array())['provider_key'] ?? '')),
+            'state' => 'retry_pending',
+            'failure_reason' => $failure_reason,
+            'retry_count' => $retry_count,
+            'message' => $scheduled ? 'Retry queued.' : 'Retry pending; scheduler unavailable.',
+            'context' => array(
+                'next_retry_at' => $next_retry_at,
+                'backoff_seconds' => (string) $backoff_seconds,
+                'scheduled' => $scheduled ? '1' : '0',
+            ),
+        ));
+
+        return array(
+            'scheduled' => $scheduled,
+            'next_retry_at' => $next_retry_at,
+            'backoff_seconds' => $backoff_seconds,
+        );
+    }
+
+    public static function handle_scheduled_retry($queue_id): void {
+        $queue_id = max(0, (int) $queue_id);
+        if ($queue_id < 1) {
+            return;
+        }
+
+        $status = sanitize_key((string) get_post_meta($queue_id, '_dcb_chart_route_status', true));
+        if ($status !== 'route_retry_pending') {
+            return;
+        }
+
+        $selected = get_post_meta($queue_id, '_dcb_chart_route_selected_candidate', true);
+        if (!is_array($selected) || empty($selected)) {
+            return;
+        }
+
+        $document_type = dcb_chart_routing_normalize_document_type((string) get_post_meta($queue_id, '_dcb_chart_route_selected_document_type', true));
+        $connector = self::connector();
+        $upload_log_id = (int) get_post_meta($queue_id, '_dcb_chart_route_source_upload_log_id', true);
+        $trace_id = sanitize_text_field((string) get_post_meta($queue_id, '_dcb_chart_route_trace_id', true));
+        $retry_count = max(0, (int) get_post_meta($queue_id, '_dcb_chart_route_retry_count', true)) + 1;
+        $max_retry = function_exists('dcb_chart_routing_max_retry_attempts') ? dcb_chart_routing_max_retry_attempts() : 3;
+        $attempted_at = current_time('mysql');
+
+        delete_post_meta($queue_id, '_dcb_chart_route_next_retry_at');
+
+        $artifact = array(
+            'upload_log_id' => $upload_log_id,
+            'trace_id' => $trace_id,
+            'file_name' => sanitize_text_field((string) get_post_meta($upload_log_id, '_dcb_upload_title', true)),
+            'file_path' => sanitize_text_field((string) get_post_meta($upload_log_id, '_dcb_upload_path', true)),
+            'mime' => sanitize_text_field((string) get_post_meta($upload_log_id, '_dcb_upload_mime', true)),
+        );
+
+        $resolve = $connector->resolve_chart_target($selected, array(
+            'queue_id' => $queue_id,
+            'document_type' => $document_type,
+            'retry_attempt' => $retry_count,
+        ));
+
+        if (empty($resolve['ok'])) {
+            $message = sanitize_text_field((string) ($resolve['message'] ?? 'Could not resolve chart target.'));
+            $state = function_exists('dcb_chart_routing_resolve_result_state')
+                ? dcb_chart_routing_resolve_result_state(false, 'failed', $retry_count, $max_retry)
+                : ($retry_count < $max_retry ? 'retry_pending' : 'retry_exhausted');
+
+            self::store_connector_result($queue_id, array(
+                'state' => $state,
+                'attempted' => true,
+                'confirmed' => true,
+                'attached' => false,
+                'retry_count' => $retry_count,
+                'retryable' => $state === 'retry_pending',
+                'failure_reason' => 'resolve_target_failed',
+                'message' => $message,
+                'attempted_at' => $attempted_at,
+                'failed_at' => current_time('mysql'),
+                'retry_pending_at' => $state === 'retry_pending' ? current_time('mysql') : '',
+                'retry_exhausted_at' => $state === 'retry_exhausted' ? current_time('mysql') : '',
+                'updated_at' => current_time('mysql'),
+            ));
+
+            if ($state === 'retry_pending') {
+                update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_pending');
+                self::queue_async_retry($queue_id, $trace_id, $retry_count, $max_retry, 'resolve_target_failed');
+            } else {
+                update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_exhausted');
+                update_post_meta($queue_id, '_dcb_chart_route_retry_exhausted_at', current_time('mysql'));
+                self::log_connector_event(array(
+                    'event' => 'retry_exhausted',
+                    'queue_id' => $queue_id,
+                    'trace_id' => $trace_id,
+                    'connector_mode' => self::connector_mode(),
+                    'state' => 'retry_exhausted',
+                    'failure_reason' => 'resolve_target_failed',
+                    'retry_count' => $retry_count,
+                    'message' => 'Retry attempts exhausted.',
+                ));
+            }
+            return;
+        }
+
+        $chart_target = isset($resolve['chart_target']) && is_array($resolve['chart_target']) ? $resolve['chart_target'] : array();
+        $attach = $connector->attach_document_to_chart($chart_target, $artifact, array(
+            'queue_id' => $queue_id,
+            'document_type' => $document_type,
+            'retry_attempt' => $retry_count,
+            'async_retry' => true,
+        ));
+
+        $ok = !empty($attach['ok']);
+        $requested_state = sanitize_key((string) ($attach['state'] ?? ($ok ? 'attached' : 'failed')));
+        $resolved_state = function_exists('dcb_chart_routing_resolve_result_state')
+            ? dcb_chart_routing_resolve_result_state($ok, $requested_state, $retry_count, $max_retry)
+            : ($ok ? 'attached' : ($retry_count < $max_retry ? 'retry_pending' : 'retry_exhausted'));
+        $failure_reason = sanitize_key((string) ($attach['failure_reason'] ?? ($ok ? '' : 'attach_failed')));
+        $result_message = sanitize_text_field((string) ($attach['message'] ?? ($ok ? 'Routed.' : 'Route failed.')));
+
+        self::store_connector_result($queue_id, array(
+            'state' => $resolved_state,
+            'attempted' => true,
+            'confirmed' => true,
+            'attached' => $ok,
+            'retry_count' => $retry_count,
+            'retryable' => !$ok && $resolved_state === 'retry_pending',
+            'failure_reason' => $failure_reason,
+            'message' => $result_message,
+            'external_reference' => sanitize_text_field((string) ($attach['external_reference'] ?? '')),
+            'attempted_at' => $attempted_at,
+            'attached_at' => $ok ? current_time('mysql') : '',
+            'failed_at' => $ok ? '' : current_time('mysql'),
+            'retry_pending_at' => (!$ok && $resolved_state === 'retry_pending') ? current_time('mysql') : '',
+            'retry_exhausted_at' => (!$ok && $resolved_state === 'retry_exhausted') ? current_time('mysql') : '',
+            'updated_at' => current_time('mysql'),
+        ));
+
+        if ($resolved_state === 'attached') {
+            update_post_meta($queue_id, '_dcb_chart_route_status', 'routed');
+            self::log_connector_event(array(
+                'event' => 'retry_succeeded',
+                'queue_id' => $queue_id,
+                'trace_id' => $trace_id,
+                'connector_mode' => self::connector_mode(),
+                'state' => 'attached',
+                'retry_count' => $retry_count,
+                'message' => 'Retry attach succeeded.',
+            ));
+            return;
+        }
+
+        if ($resolved_state === 'retry_pending') {
+            update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_pending');
+            self::queue_async_retry($queue_id, $trace_id, $retry_count, $max_retry, $failure_reason);
+            return;
+        }
+
+        update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_exhausted');
+        update_post_meta($queue_id, '_dcb_chart_route_retry_exhausted_at', current_time('mysql'));
+        self::log_connector_event(array(
+            'event' => 'retry_exhausted',
+            'queue_id' => $queue_id,
+            'trace_id' => $trace_id,
+            'connector_mode' => self::connector_mode(),
+            'state' => 'retry_exhausted',
+            'failure_reason' => $failure_reason,
+            'retry_count' => $retry_count,
+            'message' => 'Retry attempts exhausted.',
+        ));
     }
 
     private static function render_identifier_list(array $identifiers): string {
@@ -657,6 +951,7 @@ final class DCB_Chart_Routing {
                     'updated_at' => $attempted_at,
                 ));
                 update_post_meta($queue_id, '_dcb_chart_route_status', 'route_attempted');
+                delete_post_meta($queue_id, '_dcb_chart_route_next_retry_at');
 
                 $resolve = $connector->resolve_chart_target($selected, array(
                     'queue_id' => $queue_id,
@@ -667,7 +962,7 @@ final class DCB_Chart_Routing {
                     $error = sanitize_text_field((string) ($resolve['message'] ?? 'Could not resolve chart target.'));
                     $state = function_exists('dcb_chart_routing_resolve_result_state')
                         ? dcb_chart_routing_resolve_result_state(false, 'failed', $retry_count, $max_retry)
-                        : ($retry_count < $max_retry ? 'retry_pending' : 'failed');
+                        : ($retry_count < $max_retry ? 'retry_pending' : 'retry_exhausted');
                     self::store_connector_result($queue_id, array(
                         'state' => $state,
                         'attempted' => true,
@@ -680,9 +975,26 @@ final class DCB_Chart_Routing {
                         'attempted_at' => $attempted_at,
                         'failed_at' => current_time('mysql'),
                         'retry_pending_at' => $state === 'retry_pending' ? current_time('mysql') : '',
+                        'retry_exhausted_at' => $state === 'retry_exhausted' ? current_time('mysql') : '',
                         'updated_at' => current_time('mysql'),
                     ));
-                    update_post_meta($queue_id, '_dcb_chart_route_status', $state === 'retry_pending' ? 'route_retry_pending' : 'route_failed');
+                    if ($state === 'retry_pending') {
+                        update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_pending');
+                        self::queue_async_retry($queue_id, $trace_id, $retry_count, $max_retry, 'resolve_target_failed');
+                    } else {
+                        update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_exhausted');
+                        update_post_meta($queue_id, '_dcb_chart_route_retry_exhausted_at', current_time('mysql'));
+                        self::log_connector_event(array(
+                            'event' => 'retry_exhausted',
+                            'queue_id' => $queue_id,
+                            'trace_id' => $trace_id,
+                            'connector_mode' => self::connector_mode(),
+                            'state' => 'retry_exhausted',
+                            'failure_reason' => 'resolve_target_failed',
+                            'retry_count' => $retry_count,
+                            'message' => 'Retry attempts exhausted.',
+                        ));
+                    }
                     self::append_audit($queue_id, 'route_attach', array(
                         'chosen_patient_target' => $selected,
                         'chosen_document_type' => $document_type,
@@ -702,7 +1014,7 @@ final class DCB_Chart_Routing {
                     $requested_state = sanitize_key((string) ($attach['state'] ?? ($ok ? 'attached' : 'failed')));
                     $resolved_state = function_exists('dcb_chart_routing_resolve_result_state')
                         ? dcb_chart_routing_resolve_result_state($ok, $requested_state, $retry_count, $max_retry)
-                        : ($ok ? 'attached' : ($retry_count < $max_retry ? 'retry_pending' : 'failed'));
+                        : ($ok ? 'attached' : ($retry_count < $max_retry ? 'retry_pending' : 'retry_exhausted'));
                     $failure_reason = sanitize_key((string) ($attach['failure_reason'] ?? ($ok ? '' : 'attach_failed')));
                     $result_message = sanitize_text_field((string) ($attach['message'] ?? ($ok ? 'Routed.' : 'Route failed.')));
                     if (function_exists('dcb_chart_routing_redact_sensitive_text')) {
@@ -727,15 +1039,37 @@ final class DCB_Chart_Routing {
                         'attached_at' => $ok ? current_time('mysql') : '',
                         'failed_at' => $ok ? '' : current_time('mysql'),
                         'retry_pending_at' => (!$ok && $resolved_state === 'retry_pending') ? current_time('mysql') : '',
+                        'retry_exhausted_at' => (!$ok && $resolved_state === 'retry_exhausted') ? current_time('mysql') : '',
                         'updated_at' => current_time('mysql'),
                     ));
 
                     if ($resolved_state === 'attached') {
                         update_post_meta($queue_id, '_dcb_chart_route_status', 'routed');
+                        self::log_connector_event(array(
+                            'event' => 'attach_succeeded',
+                            'queue_id' => $queue_id,
+                            'trace_id' => $trace_id,
+                            'connector_mode' => self::connector_mode(),
+                            'state' => 'attached',
+                            'retry_count' => $retry_count,
+                            'message' => 'Route attach succeeded.',
+                        ));
                     } elseif ($resolved_state === 'retry_pending') {
                         update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_pending');
+                        self::queue_async_retry($queue_id, $trace_id, $retry_count, $max_retry, $failure_reason);
                     } else {
-                        update_post_meta($queue_id, '_dcb_chart_route_status', 'route_failed');
+                        update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_exhausted');
+                        update_post_meta($queue_id, '_dcb_chart_route_retry_exhausted_at', current_time('mysql'));
+                        self::log_connector_event(array(
+                            'event' => 'retry_exhausted',
+                            'queue_id' => $queue_id,
+                            'trace_id' => $trace_id,
+                            'connector_mode' => self::connector_mode(),
+                            'state' => 'retry_exhausted',
+                            'failure_reason' => $failure_reason,
+                            'retry_count' => $retry_count,
+                            'message' => 'Retry attempts exhausted.',
+                        ));
                     }
 
                     self::append_audit($queue_id, 'route_attach', array(
@@ -750,9 +1084,9 @@ final class DCB_Chart_Routing {
                     if ($resolved_state === 'attached') {
                         $message = 'Route operation recorded.';
                     } elseif ($resolved_state === 'retry_pending') {
-                        $error = $result_message !== '' ? $result_message : 'Route failed and is pending retry.';
+                        $error = $result_message !== '' ? $result_message : 'Route failed and was queued for retry.';
                     } else {
-                        $error = $result_message !== '' ? $result_message : 'Route failed.';
+                        $error = $result_message !== '' ? $result_message : 'Route failed and retries are exhausted.';
                     }
                 }
             }
@@ -862,6 +1196,12 @@ final class DCB_Chart_Routing {
         update_post_meta($queue_id, '_dcb_chart_route_retry_count', max(0, (int) ($normalized['retry_count'] ?? 0)));
         update_post_meta($queue_id, '_dcb_chart_route_last_attempt_at', sanitize_text_field((string) ($normalized['attempted_at'] ?? '')));
         update_post_meta($queue_id, '_dcb_chart_route_last_attached_at', sanitize_text_field((string) ($normalized['attached_at'] ?? '')));
+        if (!empty($normalized['retry_pending_at'])) {
+            update_post_meta($queue_id, '_dcb_chart_route_retry_pending_at', sanitize_text_field((string) $normalized['retry_pending_at']));
+        }
+        if (!empty($normalized['retry_exhausted_at'])) {
+            update_post_meta($queue_id, '_dcb_chart_route_retry_exhausted_at', sanitize_text_field((string) $normalized['retry_exhausted_at']));
+        }
         update_post_meta($queue_id, '_dcb_chart_route_last_connector_result', $normalized);
 
         return $normalized;

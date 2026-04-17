@@ -53,6 +53,7 @@ final class DCB_Settings {
             'dcb_chart_routing_require_confirmation' => '1',
             'dcb_chart_routing_max_retry_attempts' => 3,
             'dcb_chart_routing_last_connector_validation' => array(),
+            'dcb_chart_routing_event_log' => array(),
             'dcb_tutor_integration_enabled' => '0',
             'dcb_tutor_mapping' => array(),
             'dcb_uninstall_remove_data' => '0',

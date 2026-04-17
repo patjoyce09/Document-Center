@@ -91,4 +91,11 @@ Next-phase implementation adds an external package skeleton at:
 
 See `docs/connector-skeleton-secure-config.md` for secure config + retry-state details.
 
+## Retry + Observability Boundary
+
+- Route/attach failures can transition to `retry_pending` with bounded async backoff.
+- Retry budget exhaustion transitions to `retry_exhausted` (dead-letter boundary).
+- Queue rows surface retry count, last attempt, next retry, and dead-letter timestamp.
+- Connector events are stored as PHI-safe structured rows for compact operational visibility.
+
 No vendor credentials or hardcoded EMR endpoints/selectors are embedded in core classes.

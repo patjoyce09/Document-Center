@@ -457,7 +457,7 @@ function dcb_chart_routing_validation_payload_shape(array $payload): array {
 
 function dcb_chart_routing_route_result_payload_shape(array $payload): array {
     $state = sanitize_key((string) ($payload['state'] ?? 'attempted'));
-    $allowed = array('attempted', 'confirmed', 'attached', 'failed', 'retry_pending');
+    $allowed = array('attempted', 'confirmed', 'attached', 'failed', 'retry_pending', 'retry_exhausted');
     if (!in_array($state, $allowed, true)) {
         $state = 'attempted';
     }
@@ -477,6 +477,7 @@ function dcb_chart_routing_route_result_payload_shape(array $payload): array {
         'attached_at' => sanitize_text_field((string) ($payload['attached_at'] ?? '')),
         'failed_at' => sanitize_text_field((string) ($payload['failed_at'] ?? '')),
         'retry_pending_at' => sanitize_text_field((string) ($payload['retry_pending_at'] ?? '')),
+        'retry_exhausted_at' => sanitize_text_field((string) ($payload['retry_exhausted_at'] ?? '')),
         'updated_at' => sanitize_text_field((string) ($payload['updated_at'] ?? current_time('mysql'))),
     );
 }
@@ -495,7 +496,7 @@ function dcb_chart_routing_resolve_result_state(bool $ok, string $requested_stat
         return 'retry_pending';
     }
 
-    return 'failed';
+    return 'retry_exhausted';
 }
 
 function dcb_chart_routing_redact_sensitive_text(string $text, ?array $config = null): string {
@@ -536,4 +537,66 @@ function dcb_chart_routing_redact_sensitive_text(string $text, ?array $config = 
     }
 
     return sanitize_text_field($redacted);
+}
+
+function dcb_chart_routing_retry_backoff_seconds(int $retry_count, int $base_seconds = 60, int $max_seconds = 3600): int {
+    $retry_count = max(1, $retry_count);
+    $base_seconds = max(10, $base_seconds);
+    $max_seconds = max($base_seconds, $max_seconds);
+
+    $computed = (int) ($base_seconds * pow(2, max(0, $retry_count - 1)));
+    return max($base_seconds, min($max_seconds, $computed));
+}
+
+function dcb_chart_routing_retry_payload_shape(array $payload): array {
+    return array(
+        'queue_id' => max(0, (int) ($payload['queue_id'] ?? 0)),
+        'trace_id' => sanitize_text_field((string) ($payload['trace_id'] ?? '')),
+        'state' => sanitize_key((string) ($payload['state'] ?? 'retry_pending')),
+        'retry_count' => max(0, (int) ($payload['retry_count'] ?? 0)),
+        'max_retry' => max(1, (int) ($payload['max_retry'] ?? 3)),
+        'backoff_seconds' => max(0, (int) ($payload['backoff_seconds'] ?? 0)),
+        'next_retry_at' => sanitize_text_field((string) ($payload['next_retry_at'] ?? '')),
+        'last_failure_reason' => sanitize_key((string) ($payload['last_failure_reason'] ?? '')),
+        'updated_at' => sanitize_text_field((string) ($payload['updated_at'] ?? current_time('mysql'))),
+    );
+}
+
+function dcb_chart_routing_event_log_payload_shape(array $payload): array {
+    $message = sanitize_text_field((string) ($payload['message'] ?? ''));
+    if (function_exists('dcb_chart_routing_redact_sensitive_text')) {
+        $message = dcb_chart_routing_redact_sensitive_text($message);
+    }
+
+    return array(
+        'event' => sanitize_key((string) ($payload['event'] ?? 'connector_event')),
+        'time' => sanitize_text_field((string) ($payload['time'] ?? current_time('mysql'))),
+        'queue_id' => max(0, (int) ($payload['queue_id'] ?? 0)),
+        'trace_id' => sanitize_text_field((string) ($payload['trace_id'] ?? '')),
+        'connector_mode' => sanitize_key((string) ($payload['connector_mode'] ?? 'none_manual')),
+        'provider_key' => sanitize_key((string) ($payload['provider_key'] ?? '')),
+        'state' => sanitize_key((string) ($payload['state'] ?? '')),
+        'failure_reason' => sanitize_key((string) ($payload['failure_reason'] ?? '')),
+        'retry_count' => max(0, (int) ($payload['retry_count'] ?? 0)),
+        'message' => $message,
+        'context' => isset($payload['context']) && is_array($payload['context'])
+            ? array_map('sanitize_text_field', array_map(static function ($row) {
+                return is_scalar($row) ? (string) $row : '';
+            }, $payload['context']))
+            : array(),
+    );
+}
+
+function dcb_chart_routing_result_state_label(string $state): string {
+    $state = sanitize_key($state);
+    $labels = array(
+        'attempted' => 'Attempted',
+        'confirmed' => 'Confirmed',
+        'attached' => 'Attached',
+        'failed' => 'Failed',
+        'retry_pending' => 'Retry Pending',
+        'retry_exhausted' => 'Retry Exhausted',
+    );
+
+    return $labels[$state] ?? ucfirst(str_replace('_', ' ', $state));
 }
