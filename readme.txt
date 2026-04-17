@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.1
+Stable tag: 0.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,16 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.2 =
+* Added OCR input normalization pipeline stages for orientation correction, deskew, crop/border cleanup, contrast cleanup, PDF raster-page normalization, and max-dimension normalization.
+* Added lightweight capture-quality metadata and warnings for low-resolution/photo-risk inputs.
+* Preserved secure engine-decoupled OCR architecture and capability hardening while enriching extraction metadata (`input_source_type`, `input_normalization`).
+* Improved OCR document model fidelity with positional line metadata, layout regions, and signature/date pairing hints.
+* Improved paper-to-builder draft quality for checkbox grouping, yes/no detection, and signature/date context.
+* Added lightweight backward-compatible `digital_twin_hints` to preserve render/layout similarity to source forms without a canvas designer.
+* Added real-world OCR fixture interface (`fixtures/ocr-realworld`) with optional local binary paths plus deterministic lightweight CI samples.
+* Added real-world OCR benchmark smoke test with precision/recall/type/section/repeater/false-positive/review-cleanup-burden metrics.
+
 = 0.3.1 =
 * Added stronger OCR intermediate document model (pages, blocks, lines, anchors, section candidates, table/repeater hints, signature/date candidates) before draft generation.
 * Improved OCR label-to-input understanding for colon labels, trailing blanks/underscores, checkbox markers, yes/no pairs, and signature/date cues.

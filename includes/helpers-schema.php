@@ -386,6 +386,9 @@ function dcb_normalize_ocr_meta($meta): array {
     if (isset($meta['page_number']) && is_numeric($meta['page_number'])) {
         $out['page_number'] = max(1, (int) $meta['page_number']);
     }
+    if (isset($meta['line_index']) && is_numeric($meta['line_index'])) {
+        $out['line_index'] = max(0, (int) $meta['line_index']);
+    }
     if (isset($meta['source_text_snippet'])) {
         $out['source_text_snippet'] = sanitize_text_field((string) $meta['source_text_snippet']);
     }
@@ -399,12 +402,18 @@ function dcb_normalize_ocr_meta($meta): array {
         $score = (float) $meta['confidence_score'];
         $out['confidence_score'] = round(max(0, min(1, $score)), 4);
     }
-    foreach (array('suggested_type', 'signal', 'source_engine', 'source_text') as $key) {
+    foreach (array('suggested_type', 'detected_type', 'signal', 'source_engine', 'source_text', 'region_hint', 'section_hint') as $key) {
         if (isset($meta[$key])) {
             $value = $key === 'source_text' ? sanitize_text_field((string) $meta[$key]) : sanitize_key((string) $meta[$key]);
             if ($value !== '') {
                 $out[$key] = $value;
             }
+        }
+    }
+    if (isset($meta['confidence_reasons']) && is_array($meta['confidence_reasons'])) {
+        $reasons = array_values(array_filter(array_map('sanitize_key', $meta['confidence_reasons'])));
+        if (!empty($reasons)) {
+            $out['confidence_reasons'] = $reasons;
         }
     }
     if (isset($meta['warning_state'])) {
@@ -441,6 +450,7 @@ function dcb_normalize_ocr_candidates($candidates): array {
             'page_number' => max(1, (int) ($candidate['page_number'] ?? 1)),
             'line_index' => max(0, (int) ($candidate['line_index'] ?? 0)),
             'section_hint' => sanitize_key((string) ($candidate['section_hint'] ?? '')),
+            'region_hint' => sanitize_key((string) ($candidate['region_hint'] ?? '')),
             'source_text_snippet' => sanitize_text_field((string) ($candidate['source_text_snippet'] ?? '')),
             'confidence_bucket' => sanitize_key((string) ($candidate['confidence_bucket'] ?? 'low')),
             'confidence_score' => isset($candidate['confidence_score']) && is_numeric($candidate['confidence_score']) ? round(max(0, min(1, (float) $candidate['confidence_score'])), 4) : 0,
@@ -460,6 +470,9 @@ function dcb_normalize_ocr_candidates($candidates): array {
         if ($row['section_hint'] === '') {
             unset($row['section_hint']);
         }
+        if ($row['region_hint'] === '') {
+            unset($row['region_hint']);
+        }
 
         if (isset($candidate['confidence_reasons']) && is_array($candidate['confidence_reasons'])) {
             $reasons = array_values(array_filter(array_map('sanitize_key', $candidate['confidence_reasons'])));
@@ -469,6 +482,72 @@ function dcb_normalize_ocr_candidates($candidates): array {
         }
 
         $out[] = $row;
+    }
+
+    return $out;
+}
+
+function dcb_normalize_digital_twin_hints($hints): array {
+    if (!is_array($hints)) {
+        return array();
+    }
+
+    $out = array(
+        'hint_version' => sanitize_text_field((string) ($hints['hint_version'] ?? '1.0')),
+        'render_style' => sanitize_key((string) ($hints['render_style'] ?? 'paper_like')),
+        'page_count' => max(1, (int) ($hints['page_count'] ?? 1)),
+    );
+
+    if (isset($hints['layout_regions']) && is_array($hints['layout_regions'])) {
+        $regions = array();
+        foreach ($hints['layout_regions'] as $region) {
+            if (!is_array($region)) {
+                continue;
+            }
+            $regions[] = array(
+                'region_key' => sanitize_key((string) ($region['region_key'] ?? '')),
+                'region_type' => sanitize_key((string) ($region['region_type'] ?? 'section')),
+                'region_label' => sanitize_text_field((string) ($region['region_label'] ?? 'Region')),
+                'page_number' => max(1, (int) ($region['page_number'] ?? 1)),
+                'line_start' => max(0, (int) ($region['line_start'] ?? 0)),
+                'line_end' => max(0, (int) ($region['line_end'] ?? 0)),
+                'region_hint' => sanitize_key((string) ($region['region_hint'] ?? 'left')),
+            );
+        }
+        if (!empty($regions)) {
+            $out['layout_regions'] = $regions;
+        }
+    }
+
+    if (isset($hints['field_layout']) && is_array($hints['field_layout'])) {
+        $rows = array();
+        foreach ($hints['field_layout'] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $field_key = sanitize_key((string) ($row['field_key'] ?? ''));
+            if ($field_key === '') {
+                continue;
+            }
+            $rows[] = array(
+                'field_key' => $field_key,
+                'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
+                'line_index' => max(0, (int) ($row['line_index'] ?? 0)),
+                'section_hint' => sanitize_key((string) ($row['section_hint'] ?? '')),
+                'region_hint' => sanitize_key((string) ($row['region_hint'] ?? 'left')),
+                'order_index' => max(0, (int) ($row['order_index'] ?? 0)),
+                'confidence_bucket' => sanitize_key((string) ($row['confidence_bucket'] ?? 'low')),
+            );
+        }
+        if (!empty($rows)) {
+            $out['field_layout'] = $rows;
+        }
+    }
+
+    foreach (array('signature_pairs', 'table_regions') as $key) {
+        if (isset($hints[$key]) && is_array($hints[$key])) {
+            $out[$key] = $hints[$key];
+        }
     }
 
     return $out;
@@ -507,7 +586,7 @@ function dcb_normalize_ocr_review($review): array {
     if (isset($review['template_block_count']) && is_numeric($review['template_block_count'])) {
         $out['template_block_count'] = max(0, (int) $review['template_block_count']);
     }
-    foreach (array('section_count', 'repeater_count', 'field_candidate_count', 'table_candidate_count', 'signature_candidate_count') as $count_key) {
+    foreach (array('section_count', 'repeater_count', 'field_candidate_count', 'table_candidate_count', 'signature_candidate_count', 'layout_region_count', 'signature_pair_count') as $count_key) {
         if (isset($review[$count_key]) && is_numeric($review[$count_key])) {
             $out[$count_key] = max(0, (int) $review[$count_key]);
         }
@@ -517,6 +596,22 @@ function dcb_normalize_ocr_review($review): array {
     }
     if (isset($review['low_confidence_warning'])) {
         $out['low_confidence_warning'] = !empty($review['low_confidence_warning']);
+    }
+    if (isset($review['review_cleanup_burden_proxy']) && is_numeric($review['review_cleanup_burden_proxy'])) {
+        $out['review_cleanup_burden_proxy'] = round(max(0, min(1, (float) $review['review_cleanup_burden_proxy'])), 4);
+    }
+    if (isset($review['input_source_type'])) {
+        $out['input_source_type'] = sanitize_key((string) $review['input_source_type']);
+    }
+    if (isset($review['input_normalization']) && is_array($review['input_normalization'])) {
+        $norm = (array) $review['input_normalization'];
+        $out['input_normalization'] = array(
+            'enabled' => !empty($norm['enabled']),
+            'source_type' => sanitize_key((string) ($norm['source_type'] ?? '')),
+            'max_dimension' => max(0, (int) ($norm['max_dimension'] ?? 0)),
+            'stages' => isset($norm['stages']) && is_array($norm['stages']) ? array_values(array_filter(array_map('sanitize_key', $norm['stages']))) : array(),
+            'page_count' => max(0, (int) ($norm['page_count'] ?? 0)),
+        );
     }
 
     if (isset($review['page_extraction']) && is_array($review['page_extraction'])) {
@@ -772,6 +867,11 @@ function dcb_normalize_single_form(array $form): ?array {
     $ocr_review = dcb_normalize_ocr_review($form['ocr_review'] ?? array());
     if (!empty($ocr_review)) {
         $normalized_form['ocr_review'] = $ocr_review;
+    }
+
+    $digital_twin_hints = dcb_normalize_digital_twin_hints($form['digital_twin_hints'] ?? array());
+    if (!empty($digital_twin_hints)) {
+        $normalized_form['digital_twin_hints'] = $digital_twin_hints;
     }
 
     return $normalized_form;
@@ -1248,10 +1348,14 @@ function dcb_apply_ocr_candidate_review(array $draft_form, array $review_rows): 
             'required' => !empty($candidate['required_guess']),
             'ocr_meta' => array(
                 'page_number' => max(1, (int) ($candidate['page_number'] ?? 1)),
+                'line_index' => max(0, (int) ($candidate['line_index'] ?? 0)),
+                'section_hint' => sanitize_key((string) ($candidate['section_hint'] ?? 'main_section')),
+                'region_hint' => sanitize_key((string) ($candidate['region_hint'] ?? 'left')),
                 'source_text_snippet' => sanitize_text_field((string) ($candidate['source_text_snippet'] ?? '')),
                 'confidence_bucket' => sanitize_key((string) ($candidate['confidence_bucket'] ?? 'low')),
                 'confidence_score' => round(max(0, min(1, (float) ($candidate['confidence_score'] ?? 0))), 4),
                 'suggested_type' => $type,
+                'detected_type' => sanitize_key((string) ($candidate['detected_type'] ?? $type)),
                 'source_engine' => sanitize_key((string) ($candidate['source_engine'] ?? '')),
                 'warning_state' => sanitize_key((string) ($candidate['warning_state'] ?? 'none')),
                 'review_state' => 'confirmed',
@@ -1269,6 +1373,7 @@ function dcb_apply_ocr_candidate_review(array $draft_form, array $review_rows): 
     }
     $draft_form['ocr_review']['accepted_count'] = count($fields);
     $draft_form['ocr_review']['reviewed_count'] = count($normalized_rows);
+    $draft_form['ocr_review']['review_cleanup_burden_proxy'] = count($normalized_rows) > 0 ? round(max(0, count($normalized_rows) - count($fields)) / max(1, count($normalized_rows)), 4) : 0.0;
 
     return $draft_form;
 }

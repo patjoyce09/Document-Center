@@ -118,6 +118,31 @@ Filter enriched OCR field candidate after scoring/type inference and before dedu
 3. `$document_model` (`array`)
 4. `$page_meta` (`array`)
 
+### `dcb_ocr_input_normalization_page`
+Filter per-page normalization metadata used before OCR fallback.
+
+**Arguments**
+1. `$page_meta` (`array`)
+2. `$inspection` (`array`)
+3. `$normalized_result` (`array`)
+4. `$source_path` (`string`)
+
+### `dcb_ocr_input_normalization_result`
+Filter full OCR input normalization result payload.
+
+**Arguments**
+1. `$normalization` (`array`)
+2. `$inspection` (`array`)
+3. `$file_path` (`string`)
+
+### `dcb_ocr_digital_twin_hints`
+Filter lightweight digital twin render/layout hints produced for OCR-generated drafts.
+
+**Arguments**
+1. `$hints` (`array`)
+2. `$document_model` (`array`)
+3. `$fields` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`

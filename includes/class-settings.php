@@ -44,6 +44,8 @@ final class DCB_Settings {
             'dcb_ocr_timeout_seconds' => 30,
             'dcb_ocr_max_file_size_mb' => 15,
             'dcb_ocr_confidence_threshold' => 0.45,
+            'dcb_ocr_input_normalization_enabled' => '1',
+            'dcb_ocr_input_max_dimension' => 2200,
             'dcb_ocr_correction_rules' => array(),
             'dcb_tutor_integration_enabled' => '0',
             'dcb_tutor_mapping' => array(),
@@ -72,6 +74,8 @@ final class DCB_Settings {
         register_setting('dcb_settings_group', 'dcb_ocr_timeout_seconds');
         register_setting('dcb_settings_group', 'dcb_ocr_max_file_size_mb');
         register_setting('dcb_settings_group', 'dcb_ocr_confidence_threshold');
+        register_setting('dcb_settings_group', 'dcb_ocr_input_normalization_enabled');
+        register_setting('dcb_settings_group', 'dcb_ocr_input_max_dimension');
         register_setting('dcb_settings_group', 'dcb_ocr_correction_rules');
         register_setting('dcb_settings_group', 'dcb_tutor_integration_enabled');
         register_setting('dcb_settings_group', 'dcb_tutor_mapping');

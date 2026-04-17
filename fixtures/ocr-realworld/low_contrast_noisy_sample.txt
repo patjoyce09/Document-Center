@@ -1,0 +1,5 @@
+BILLING
+Claim Number: _____________
+Service Date: ____ / ____ / ______
+Amount: _____________
+Description: ______________________

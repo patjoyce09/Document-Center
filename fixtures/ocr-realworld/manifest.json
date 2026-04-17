@@ -1,0 +1,94 @@
+{
+  "fixture_version": "1.0",
+  "notes": "Lightweight real-world OCR benchmark interface. Binary samples can be added locally without committing large files.",
+  "cases": [
+    {
+      "case_id": "scanned_pdf_intake",
+      "label": "Scanned Intake PDF",
+      "source_type": "pdf",
+      "sample_path": "fixtures/ocr-realworld/scanned_pdf_sample.txt",
+      "optional_binary_path": "fixtures/ocr-realworld/local/scanned_pdf_intake.pdf",
+      "expected": {
+        "fields": [
+          { "key": "patient_name", "type": "text" },
+          { "key": "date_of_birth", "type": "date" },
+          { "key": "phone", "type": "text" },
+          { "key": "signature", "type": "text" }
+        ],
+        "sections": ["patient_information", "consent"],
+        "min_repeater_count": 0,
+        "max_false_positive": 6
+      }
+    },
+    {
+      "case_id": "phone_photo_registration",
+      "label": "Phone Photo Registration",
+      "source_type": "photo",
+      "sample_path": "fixtures/ocr-realworld/phone_photo_sample.txt",
+      "optional_binary_path": "fixtures/ocr-realworld/local/phone_photo_registration.jpg",
+      "expected": {
+        "fields": [
+          { "key": "full_name", "type": "text" },
+          { "key": "email", "type": "email" },
+          { "key": "yes_no_contact_ok", "type": "yes_no" },
+          { "key": "date", "type": "date" }
+        ],
+        "sections": ["contact_details"],
+        "min_repeater_count": 0,
+        "max_false_positive": 6
+      }
+    },
+    {
+      "case_id": "rotated_skewed_page",
+      "label": "Rotated/Skewed Page",
+      "source_type": "photo",
+      "sample_path": "fixtures/ocr-realworld/rotated_skewed_sample.txt",
+      "optional_binary_path": "fixtures/ocr-realworld/local/rotated_skewed_page.jpg",
+      "expected": {
+        "fields": [
+          { "key": "member_id", "type": "number" },
+          { "key": "group_number", "type": "number" },
+          { "key": "date", "type": "date" }
+        ],
+        "sections": ["insurance_information"],
+        "min_repeater_count": 0,
+        "max_false_positive": 5
+      }
+    },
+    {
+      "case_id": "low_contrast_noisy",
+      "label": "Low Contrast Noisy Capture",
+      "source_type": "photo",
+      "sample_path": "fixtures/ocr-realworld/low_contrast_noisy_sample.txt",
+      "optional_binary_path": "fixtures/ocr-realworld/local/low_contrast_noisy.jpg",
+      "expected": {
+        "fields": [
+          { "key": "claim_number", "type": "number" },
+          { "key": "service_date", "type": "date" },
+          { "key": "amount", "type": "number" }
+        ],
+        "sections": ["billing"],
+        "min_repeater_count": 0,
+        "max_false_positive": 7
+      }
+    },
+    {
+      "case_id": "multi_page_packet",
+      "label": "Multi-Page Packet",
+      "source_type": "pdf",
+      "sample_path": "fixtures/ocr-realworld/multi_page_packet_sample.txt",
+      "optional_binary_path": "fixtures/ocr-realworld/local/multi_page_packet.pdf",
+      "expected": {
+        "fields": [
+          { "key": "patient_name", "type": "text" },
+          { "key": "medication", "type": "text" },
+          { "key": "dose", "type": "number" },
+          { "key": "frequency", "type": "text" }
+        ],
+        "sections": ["demographics", "medication_history"],
+        "min_repeater_count": 1,
+        "max_false_positive": 8
+      }
+    }
+  ]
+}

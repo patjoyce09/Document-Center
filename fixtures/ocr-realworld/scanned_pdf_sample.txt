@@ -1,0 +1,10 @@
+Section: Patient Information
+Patient Name: ______________________
+Date of Birth: ____ / ____ / ______
+Phone: ______________________
+Email: ______________________
+
+Section: Consent
+I authorize treatment [ ]
+Signature: ______________________
+Date: ____ / ____ / ______
