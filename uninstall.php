@@ -3,6 +3,21 @@ if (!defined('WP_UNINSTALL_PLUGIN')) {
     exit;
 }
 
+$ops_helper = __DIR__ . '/includes/helpers-ops.php';
+if (is_readable($ops_helper)) {
+    require_once $ops_helper;
+}
+
+$purge_all = function_exists('dcb_ops_uninstall_should_purge') ? dcb_ops_uninstall_should_purge() : false;
+
+// Always clear lightweight sync marker.
+delete_option('dcb_caps_last_synced');
+
+if (!$purge_all) {
+    // Conservative default: keep stored forms/submissions/settings unless admin explicitly enables purge.
+    return;
+}
+
 $option_keys = array(
     'dcb_forms_custom',
     'dcb_upload_routing_rules',
@@ -29,8 +44,27 @@ $option_keys = array(
     'dcb_ocr_confidence_threshold',
     'dcb_tutor_integration_enabled',
     'dcb_tutor_mapping',
+    'dcb_uninstall_remove_data',
 );
 
 foreach ($option_keys as $key) {
     delete_option($key);
+}
+
+if (function_exists('get_posts') && function_exists('wp_delete_post')) {
+    $post_types = array('dcb_form_submission', 'dcb_upload_log', 'dcb_ocr_review_queue');
+    foreach ($post_types as $post_type) {
+        $ids = get_posts(array(
+            'post_type' => $post_type,
+            'post_status' => 'any',
+            'numberposts' => -1,
+            'fields' => 'ids',
+        ));
+        if (!is_array($ids)) {
+            continue;
+        }
+        foreach ($ids as $id) {
+            wp_delete_post((int) $id, true);
+        }
+    }
 }

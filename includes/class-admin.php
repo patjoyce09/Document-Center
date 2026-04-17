@@ -37,6 +37,7 @@ final class DCB_Admin {
         echo '<h1>Document Center Builder</h1>';
         echo '<p>Reusable digital document/form system with OCR-assisted workflows.</p>';
         echo '<ul>';
+        echo '<li><a class="button button-primary" href="' . esc_url(admin_url('admin.php?page=dcb-ops')) . '">Setup &amp; Operations</a></li>';
         echo '<li><a class="button" href="' . esc_url(admin_url('admin.php?page=dcb-builder')) . '">Open Builder</a></li>';
         echo '<li><a class="button" href="' . esc_url(admin_url('edit.php?post_type=dcb_form_submission')) . '">View Submissions</a></li>';
         echo '<li><a class="button" href="' . esc_url(admin_url('admin.php?page=dcb-workflow-queues')) . '">Workflow Queues</a></li>';

@@ -183,6 +183,25 @@ Filter assembled intake trace timeline payload before admin timeline rendering.
 1. `$timeline_payload` (`array`)
 2. `$raw_payload` (`array`)
 
+### `dcb_sample_template_pack`
+Filter bundled generic sample templates before load into builder forms.
+
+**Arguments**
+1. `$pack` (`array`)
+
+### `dcb_forms_export_payload`
+Filter structured forms export payload before JSON download.
+
+**Arguments**
+1. `$payload` (`array`)
+2. `$forms` (`array`)
+
+### `dcb_license_update_boundary`
+Filter isolated placeholder payload for future license/update boundary status.
+
+**Arguments**
+1. `$payload` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`

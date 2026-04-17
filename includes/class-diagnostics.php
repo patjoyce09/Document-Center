@@ -67,6 +67,12 @@ final class DCB_Diagnostics {
         echo '<p class="description">Tutor LMS plugin active: <strong>' . esc_html(class_exists('DCB_Integration_Tutor') && DCB_Integration_Tutor::is_tutor_available() ? 'yes' : 'no') . '</strong></p>';
         echo '</td></tr>';
 
+        $purge_on_uninstall = $field('dcb_uninstall_remove_data') === '1';
+        echo '<tr><th scope="row">Uninstall Cleanup</th><td>';
+        echo '<label><input type="checkbox" name="dcb_uninstall_remove_data" value="1" ' . checked($purge_on_uninstall, true, false) . ' /> Purge plugin options/data when plugin is uninstalled</label>';
+        echo '<p class="description">Default is conservative (off). Keep disabled to avoid unexpected data loss.</p>';
+        echo '</td></tr>';
+
         if (class_exists('DCB_Integration_Tutor')) {
             DCB_Integration_Tutor::render_settings_rows();
         } else {
@@ -123,6 +129,7 @@ final class DCB_Diagnostics {
         update_option('dcb_upload_email_attachments', !empty($_POST['dcb_upload_email_attachments']) ? '1' : '0', false);
         update_option('dcb_workflow_enable_activity_timeline', !empty($_POST['dcb_workflow_enable_activity_timeline']) ? '1' : '0', false);
         update_option('dcb_tutor_integration_enabled', !empty($_POST['dcb_tutor_integration_enabled']) ? '1' : '0', false);
+        update_option('dcb_uninstall_remove_data', !empty($_POST['dcb_uninstall_remove_data']) ? '1' : '0', false);
 
         $ocr_timeout = isset($_POST['dcb_ocr_timeout_seconds']) ? (int) $_POST['dcb_ocr_timeout_seconds'] : 30;
         update_option('dcb_ocr_timeout_seconds', max(5, min(120, $ocr_timeout)), false);

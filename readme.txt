@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.7
+Stable tag: 0.3.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -23,6 +23,8 @@ Document Center Builder provides:
 - Optional Tutor LMS integration layer with structured form-to-course/lesson/quiz mapping
 - OCR diagnostics, capability checks, and OCR review queue
 - Generic upload portal + routing rules
+- Setup & operations admin surface with first-run readiness checks
+- Generic sample template pack and validated forms import/export flow
 
 Capability model:
 - dcb_manage_forms
@@ -48,6 +50,15 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.8 =
+* Added Setup & Operations admin screen with first-run readiness checks (capabilities, OCR mode/config, upload writability, permalink/admin readiness).
+* Added actionable diagnostics links and compact permissions matrix reference without changing capability grants.
+* Added generic sample template pack (intake, consent/attestation, simple packet) for demo/testing startup.
+* Added hardened import/export forms flow with explicit payload contract, validation, merge/replace import modes, and JSON export download action.
+* Added conservative uninstall policy default with explicit opt-in data purge setting.
+* Added operations helper layer (`includes/helpers-ops.php`) and smoke tests for readiness, import/export validation, sample pack, uninstall behavior, and permissions matrix.
+* Added release hygiene cleanup for root-level release-noise artifact.
+
 = 0.3.7 =
 * Added dedicated Intake Trace Timeline admin screen keyed by `trace_id` for single-chain visibility from upload artifact through OCR review and submission workflow status.
 * Added reusable timeline helper payload layer (`dcb_intake_trace_build_payload`, linked-id resolver, state summary, event builder, admin URL helper).
