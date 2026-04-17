@@ -64,16 +64,14 @@ final class DCB_Diagnostics {
         $tutor_enabled = $field('dcb_tutor_integration_enabled') === '1';
         echo '<tr><th scope="row">Tutor LMS Integration</th><td>';
         echo '<label><input type="checkbox" name="dcb_tutor_integration_enabled" value="1" ' . checked($tutor_enabled, true, false) . ' /> Enable optional Tutor LMS integration module</label>';
+        echo '<p class="description">Tutor LMS plugin active: <strong>' . esc_html(class_exists('DCB_Integration_Tutor') && DCB_Integration_Tutor::is_tutor_available() ? 'yes' : 'no') . '</strong></p>';
         echo '</td></tr>';
 
-        $mapping_raw = wp_json_encode(get_option('dcb_tutor_mapping', array()), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-        if (!is_string($mapping_raw)) {
-            $mapping_raw = '{}';
+        if (class_exists('DCB_Integration_Tutor')) {
+            DCB_Integration_Tutor::render_settings_rows();
+        } else {
+            self::render_text_row('Tutor Mapping JSON (fallback)', 'dcb_tutor_mapping_json', '{}');
         }
-        echo '<tr><th scope="row"><label for="dcb_tutor_mapping_json">Tutor Mapping JSON</label></th><td>';
-        echo '<textarea id="dcb_tutor_mapping_json" name="dcb_tutor_mapping_json" rows="8" class="large-text code">' . esc_textarea($mapping_raw) . '</textarea>';
-        echo '<p class="description">Optional mapping by form key. Example: {"intake_form": {"course_id": 123, "lesson_id": 0, "quiz_id": 0, "require_course_completion": true}}</p>';
-        echo '</td></tr>';
 
         echo '</tbody></table>';
 
@@ -135,12 +133,16 @@ final class DCB_Diagnostics {
         $ocr_threshold = isset($_POST['dcb_ocr_confidence_threshold']) ? (float) $_POST['dcb_ocr_confidence_threshold'] : 0.45;
         update_option('dcb_ocr_confidence_threshold', max(0.0, min(1.0, $ocr_threshold)), false);
 
-        $mapping_raw = isset($_POST['dcb_tutor_mapping_json']) ? wp_unslash((string) $_POST['dcb_tutor_mapping_json']) : '{}';
-        $mapping = json_decode($mapping_raw, true);
-        if (!is_array($mapping)) {
-            $mapping = array();
+        if (class_exists('DCB_Integration_Tutor')) {
+            DCB_Integration_Tutor::save_settings_from_post($_POST);
+        } else {
+            $mapping_raw = isset($_POST['dcb_tutor_mapping_json']) ? wp_unslash((string) $_POST['dcb_tutor_mapping_json']) : '{}';
+            $mapping = json_decode($mapping_raw, true);
+            if (!is_array($mapping)) {
+                $mapping = array();
+            }
+            update_option('dcb_tutor_mapping', $mapping, false);
         }
-        update_option('dcb_tutor_mapping', $mapping, false);
 
         wp_safe_redirect(add_query_arg(array('page' => 'dcb-settings', 'updated' => '1'), admin_url('admin.php')));
         exit;

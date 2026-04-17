@@ -179,7 +179,11 @@ final class DCB_Submissions {
 
         $access_allowed = apply_filters('dcb_submission_access_allowed', true, $form_key, get_current_user_id(), array('source' => 'submit_ajax'));
         if (!$access_allowed) {
-            wp_send_json_error(array('message' => 'Access denied for this form. Prerequisites were not met.'), 403);
+            $message = 'Access denied for this form. Prerequisites were not met.';
+            if (class_exists('DCB_Integration_Tutor')) {
+                $message = DCB_Integration_Tutor::merge_submission_access_denial_message($message, $form_key, get_current_user_id());
+            }
+            wp_send_json_error(array('message' => $message), 403);
         }
 
         $policy_versions = dcb_get_policy_versions();
@@ -336,6 +340,9 @@ final class DCB_Submissions {
 
         $submission_id = (int) $post->ID;
         echo dcb_render_submission_html($submission_id, 'admin'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        if (class_exists('DCB_Integration_Tutor')) {
+            echo DCB_Integration_Tutor::render_submission_integration_meta($submission_id); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        }
     }
 
     public static function submission_columns(array $columns): array {

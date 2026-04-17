@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.9
+Stable tag: 0.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,9 +20,9 @@ Document Center Builder provides:
 - Ordered document nodes + template blocks + output template metadata
 - Workflow statuses, assignees, queues, and activity timeline
 - Submission storage + signature evidence + finalization metadata
+- Optional Tutor LMS integration layer with structured form-to-course/lesson/quiz mapping
 - OCR diagnostics, capability checks, and OCR review queue
 - Generic upload portal + routing rules
-- Optional Tutor LMS integration layer (isolated module)
 
 Capability model:
 - dcb_manage_forms
@@ -48,6 +48,17 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.0 =
+* Productized Tutor LMS integration as an optional, isolated module with strict guardrails when Tutor is not installed.
+* Replaced Tutor mapping JSON-only management with a structured settings UI for form-to-course/lesson/quiz mapping.
+* Added per-mapping toggles for prerequisite gating, post-completion assignment attempts, and relationship metadata recording.
+* Improved access gating diagnostics with mapped requirement context, detected completion state, and denial reason tracking.
+* Strengthened completion relation metadata (`mapping_key`, `form_key`, `user_id`, `course_id`, `lesson_id`, `quiz_id`, `recorded_at`, `relation_type`, `trigger_source`) while preserving `_dcb_tutor_relation` compatibility.
+* Added optional training-assignment adapter boundary (`dcb_tutor_training_assignment_adapter`) with guarded native fallback.
+* Added Tutor lifecycle hooks for mapping resolution, gating outcomes, relation recording, and assignment attempt/completion/failure.
+* Added Tutor integration admin visibility section on submission detail views.
+* Added focused Tutor integration smoke test and CI coverage.
+
 = 0.2.9 =
 * Implemented signature service layer with normalized signature evidence persistence/retrieval and backward-compatible legacy evidence fallback.
 * Expanded signature evidence model to include signer display name/user id, signature timestamps, mode, signature field/source context, and optional private request metadata.

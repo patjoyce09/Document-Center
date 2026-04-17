@@ -88,6 +88,20 @@ Control whether private request metadata (IP/user-agent) appears in rendered sig
 2. `$submission_id` (`int`)
 3. `$view` (`string`)
 
+### `dcb_tutor_training_assignment_adapter`
+Optional Tutor training-assignment adapter boundary used after submission completion.
+
+Return `null` to allow native guarded fallback, or array shape:
+- `attempted` (`bool`)
+- `success` (`bool`)
+- `message` (`string`)
+- `method` (`string`)
+
+**Arguments**
+1. `$adapter_result` (`array|null`)
+2. `$payload` (`array`)
+3. `$mapping` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`
@@ -190,3 +204,55 @@ Filter rendered submission HTML for admin/final/print contexts.
 2. `$submission_id` (`int`)
 3. `$view` (`string`)
 4. `$payload` (`array`)
+
+### `dcb_tutor_mapping_resolved`
+Fires when Tutor mapping is resolved for access or completion lifecycle steps.
+
+**Arguments**
+1. `$form_key` (`string`)
+2. `$mapping` (`array`)
+3. `$context` (`array`)
+
+### `dcb_tutor_access_evaluated`
+Fires when Tutor-gated access checks are evaluated.
+
+**Arguments**
+1. `$details` (`array`)
+
+### `dcb_tutor_access_gated`
+Fires when Tutor prerequisite checks deny access.
+
+**Arguments**
+1. `$details` (`array`)
+
+### `dcb_tutor_completion_relation_recorded`
+Fires after Tutor relation metadata is recorded on a submission.
+
+**Arguments**
+1. `$submission_id` (`int`)
+2. `$relation` (`array`)
+3. `$mapping` (`array`)
+
+### `dcb_tutor_training_assignment_attempted`
+Fires after a training-assignment attempt is executed.
+
+**Arguments**
+1. `$submission_id` (`int`)
+2. `$assignment` (`array`)
+3. `$mapping` (`array`)
+
+### `dcb_tutor_training_assignment_completed`
+Fires when a training-assignment attempt succeeds.
+
+**Arguments**
+1. `$submission_id` (`int`)
+2. `$assignment` (`array`)
+3. `$mapping` (`array`)
+
+### `dcb_tutor_training_assignment_failed`
+Fires when a training-assignment attempt fails or is skipped.
+
+**Arguments**
+1. `$submission_id` (`int`)
+2. `$assignment` (`array`)
+3. `$mapping` (`array`)
