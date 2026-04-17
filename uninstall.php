@@ -42,9 +42,14 @@ $option_keys = array(
     'dcb_ocr_timeout_seconds',
     'dcb_ocr_max_file_size_mb',
     'dcb_ocr_confidence_threshold',
+    'dcb_chart_routing_mode',
+    'dcb_chart_routing_connector_config',
     'dcb_tutor_integration_enabled',
     'dcb_tutor_mapping',
     'dcb_uninstall_remove_data',
+    'dcb_health_weekly_digest_enabled',
+    'dcb_ops_last_action',
+    'dcb_license_state',
 );
 
 foreach ($option_keys as $key) {
@@ -52,7 +57,7 @@ foreach ($option_keys as $key) {
 }
 
 if (function_exists('get_posts') && function_exists('wp_delete_post')) {
-    $post_types = array('dcb_form_submission', 'dcb_upload_log', 'dcb_ocr_review_queue');
+    $post_types = array('dcb_form_submission', 'dcb_upload_log', 'dcb_ocr_review_queue', 'dcb_chart_route_queue');
     foreach ($post_types as $post_type) {
         $ids = get_posts(array(
             'post_type' => $post_type,

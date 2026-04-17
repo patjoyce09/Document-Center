@@ -39,10 +39,14 @@ jobs:
           php tests/intake_trace_timeline_payload_smoke.php
           php tests/intake_trace_admin_links_smoke.php
           php tests/setup_readiness_payload_smoke.php
+          php tests/system_health_snapshot_smoke.php
           php tests/forms_import_export_ops_smoke.php
           php tests/sample_template_pack_smoke.php
           php tests/uninstall_behavior_helper_smoke.php
           php tests/permissions_matrix_ops_smoke.php
+          php tests/release_version_consistency_smoke.php
+          php tests/release_packaging_manifest_smoke.php
+          php tests/weekly_digest_payload_smoke.php
           php tests/output_signatures_smoke.php
           php tests/tutor_integration_smoke.php
 

@@ -202,6 +202,27 @@ Filter isolated placeholder payload for future license/update boundary status.
 **Arguments**
 1. `$payload` (`array`)
 
+### `dcb_system_health_snapshot_payload`
+Filter compact dashboard/admin system-health snapshot payload.
+
+**Arguments**
+1. `$payload` (`array`)
+2. `$context` (`array`)
+
+### `dcb_health_weekly_digest_payload`
+Filter optional weekly internal digest payload scaffold.
+
+**Arguments**
+1. `$digest` (`array`)
+2. `$snapshot` (`array`)
+3. `$context` (`array`)
+
+### `dcb_release_package_exclude_patterns`
+Filter file-pattern exclusions used by release packaging helpers.
+
+**Arguments**
+1. `$patterns` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`

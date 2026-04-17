@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.8
+Stable tag: 0.3.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,6 +25,8 @@ Document Center Builder provides:
 - Generic upload portal + routing rules
 - Setup & operations admin surface with first-run readiness checks
 - Generic sample template pack and validated forms import/export flow
+- Compact system health snapshot panel with action links
+- Clean release packaging script/workflow boundary
 
 Capability model:
 - dcb_manage_forms
@@ -50,6 +52,15 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.9 =
+* Added compact System Health Snapshot panel on the Document Center dashboard with setup readiness, OCR mode/health, upload/storage note, OCR queue counts, unresolved OCR risk count, workflow summary, and recent ops action state.
+* Added action-oriented snapshot links to Setup & Operations, OCR diagnostics/queue, intake trace timeline/upload artifacts, and workflow queues.
+* Added operations action-state recording (`dcb_ops_last_action`) for import/export/sample-template visibility.
+* Added weekly admin digest payload scaffold (disabled by default, internal-only summary model, no external telemetry).
+* Added release automation boundary with version/stable-tag/changelog consistency helpers, packaging exclusion helpers, manual release workflow, and clean zip build script (`scripts/build-release.sh`).
+* Added docs for release packaging path and expanded setup/operations guide with health snapshot + digest notes.
+* Added smoke tests for health snapshot payload shaping, release consistency/packaging helpers, and digest payload shaping.
+
 = 0.3.8 =
 * Added Setup & Operations admin screen with first-run readiness checks (capabilities, OCR mode/config, upload writability, permalink/admin readiness).
 * Added actionable diagnostics links and compact permissions matrix reference without changing capability grants.

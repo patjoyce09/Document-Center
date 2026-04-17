@@ -47,9 +47,13 @@ final class DCB_Settings {
             'dcb_ocr_input_normalization_enabled' => '1',
             'dcb_ocr_input_max_dimension' => 2200,
             'dcb_ocr_correction_rules' => array(),
+            'dcb_chart_routing_mode' => 'none_manual',
+            'dcb_chart_routing_connector_config' => array(),
             'dcb_tutor_integration_enabled' => '0',
             'dcb_tutor_mapping' => array(),
             'dcb_uninstall_remove_data' => '0',
+            'dcb_health_weekly_digest_enabled' => '0',
+            'dcb_ops_last_action' => array(),
         );
     }
 
@@ -78,9 +82,13 @@ final class DCB_Settings {
         register_setting('dcb_settings_group', 'dcb_ocr_input_normalization_enabled');
         register_setting('dcb_settings_group', 'dcb_ocr_input_max_dimension');
         register_setting('dcb_settings_group', 'dcb_ocr_correction_rules');
+        register_setting('dcb_settings_group', 'dcb_chart_routing_mode');
+        register_setting('dcb_settings_group', 'dcb_chart_routing_connector_config');
         register_setting('dcb_settings_group', 'dcb_tutor_integration_enabled');
         register_setting('dcb_settings_group', 'dcb_tutor_mapping');
         register_setting('dcb_settings_group', 'dcb_uninstall_remove_data');
+        register_setting('dcb_settings_group', 'dcb_health_weekly_digest_enabled');
+        register_setting('dcb_settings_group', 'dcb_ops_last_action');
 
         register_setting('dcb_settings_group', 'dcb_upload_accept_mimes', array(
             'type' => 'array',

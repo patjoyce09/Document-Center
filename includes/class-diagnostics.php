@@ -47,9 +47,19 @@ final class DCB_Diagnostics {
         self::render_text_row('OCR Timeout Seconds', 'dcb_ocr_timeout_seconds', $field('dcb_ocr_timeout_seconds'));
         self::render_text_row('OCR Max File Size (MB)', 'dcb_ocr_max_file_size_mb', $field('dcb_ocr_max_file_size_mb'));
         self::render_text_row('OCR Confidence Threshold', 'dcb_ocr_confidence_threshold', $field('dcb_ocr_confidence_threshold'));
+        self::render_text_row('Chart Routing Mode (none_manual|api|bot|report_import)', 'dcb_chart_routing_mode', $field('dcb_chart_routing_mode'));
         self::render_text_row('Tesseract Path', 'dcb_upload_tesseract_path', $field('dcb_upload_tesseract_path'));
         self::render_text_row('pdftotext Path', 'dcb_upload_pdftotext_path', $field('dcb_upload_pdftotext_path'));
         self::render_text_row('pdftoppm Path', 'dcb_upload_pdftoppm_path', $field('dcb_upload_pdftoppm_path'));
+
+        $chart_connector_config = get_option('dcb_chart_routing_connector_config', array());
+        if (!is_array($chart_connector_config)) {
+            $chart_connector_config = array();
+        }
+        echo '<tr><th scope="row"><label for="dcb_chart_routing_connector_config_json">Chart Routing Connector Config (JSON)</label></th><td>';
+        echo '<textarea class="large-text code" rows="5" id="dcb_chart_routing_connector_config_json" name="dcb_chart_routing_connector_config_json" placeholder="{}">' . esc_textarea((string) wp_json_encode($chart_connector_config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) . '</textarea>';
+        echo '<p class="description">Generic connector boundary only. Do not store vendor secrets in code.</p>';
+        echo '</td></tr>';
 
         $checked = $field('dcb_upload_email_attachments') === '1';
         echo '<tr><th scope="row">Email Attachments</th><td>';
@@ -71,6 +81,12 @@ final class DCB_Diagnostics {
         echo '<tr><th scope="row">Uninstall Cleanup</th><td>';
         echo '<label><input type="checkbox" name="dcb_uninstall_remove_data" value="1" ' . checked($purge_on_uninstall, true, false) . ' /> Purge plugin options/data when plugin is uninstalled</label>';
         echo '<p class="description">Default is conservative (off). Keep disabled to avoid unexpected data loss.</p>';
+        echo '</td></tr>';
+
+        $weekly_digest = $field('dcb_health_weekly_digest_enabled') === '1';
+        echo '<tr><th scope="row">Weekly Admin Digest (Scaffold)</th><td>';
+        echo '<label><input type="checkbox" name="dcb_health_weekly_digest_enabled" value="1" ' . checked($weekly_digest, true, false) . ' /> Enable weekly internal health digest scaffold</label>';
+        echo '<p class="description">Disabled by default. No external telemetry; summary remains internal-only.</p>';
         echo '</td></tr>';
 
         if (class_exists('DCB_Integration_Tutor')) {
@@ -115,6 +131,7 @@ final class DCB_Diagnostics {
             'dcb_ocr_mode',
             'dcb_ocr_api_base_url',
             'dcb_ocr_api_key',
+            'dcb_chart_routing_mode',
         );
 
         foreach ($text_options as $opt) {
@@ -130,6 +147,7 @@ final class DCB_Diagnostics {
         update_option('dcb_workflow_enable_activity_timeline', !empty($_POST['dcb_workflow_enable_activity_timeline']) ? '1' : '0', false);
         update_option('dcb_tutor_integration_enabled', !empty($_POST['dcb_tutor_integration_enabled']) ? '1' : '0', false);
         update_option('dcb_uninstall_remove_data', !empty($_POST['dcb_uninstall_remove_data']) ? '1' : '0', false);
+        update_option('dcb_health_weekly_digest_enabled', !empty($_POST['dcb_health_weekly_digest_enabled']) ? '1' : '0', false);
 
         $ocr_timeout = isset($_POST['dcb_ocr_timeout_seconds']) ? (int) $_POST['dcb_ocr_timeout_seconds'] : 30;
         update_option('dcb_ocr_timeout_seconds', max(5, min(120, $ocr_timeout)), false);
@@ -139,6 +157,21 @@ final class DCB_Diagnostics {
 
         $ocr_threshold = isset($_POST['dcb_ocr_confidence_threshold']) ? (float) $_POST['dcb_ocr_confidence_threshold'] : 0.45;
         update_option('dcb_ocr_confidence_threshold', max(0.0, min(1.0, $ocr_threshold)), false);
+
+        $chart_mode = sanitize_key((string) ($_POST['dcb_chart_routing_mode'] ?? 'none_manual'));
+        if (!in_array($chart_mode, array('none_manual', 'api', 'bot', 'report_import'), true)) {
+            $chart_mode = 'none_manual';
+        }
+        update_option('dcb_chart_routing_mode', $chart_mode, false);
+
+        $chart_connector_raw = isset($_POST['dcb_chart_routing_connector_config_json'])
+            ? wp_unslash((string) $_POST['dcb_chart_routing_connector_config_json'])
+            : '{}';
+        $chart_connector = json_decode($chart_connector_raw, true);
+        if (!is_array($chart_connector)) {
+            $chart_connector = array();
+        }
+        update_option('dcb_chart_routing_connector_config', $chart_connector, false);
 
         if (class_exists('DCB_Integration_Tutor')) {
             DCB_Integration_Tutor::save_settings_from_post($_POST);

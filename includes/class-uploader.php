@@ -93,6 +93,18 @@ final class DCB_Uploader {
 
             if ($log_id > 0) {
                 update_post_meta($log_id, '_dcb_upload_trace_id', $trace_id);
+
+                if (function_exists('do_action')) {
+                    do_action('dcb_upload_artifact_logged', (int) $log_id, array(
+                        'review_item_id' => $review_item_id,
+                        'trace_id' => $trace_id,
+                        'source_channel' => $source_channel,
+                        'capture_type' => $capture_type,
+                        'hint' => $hint,
+                        'ocr_text' => (string) ($text_result['text'] ?? ''),
+                        'ocr_meta' => $ocr,
+                    ));
+                }
             }
 
             if ($routing_target !== '') {

@@ -13,6 +13,20 @@ Open **Document Center → Setup & Operations** and confirm:
 3. Upload directory writable status
 4. Permalink/admin readiness
 
+## System Health Snapshot
+
+Open **Document Center → Dashboard** for a compact system-health snapshot panel showing:
+
+- setup readiness summary
+- OCR mode/health status
+- upload/storage note
+- OCR review queue status counts
+- unresolved OCR risk count
+- workflow status summary
+- last setup/import/export/sample action
+
+The snapshot includes direct links to Setup & Operations, OCR diagnostics/review queue, intake trace timeline/upload artifacts, and workflow queues.
+
 ## OCR Workflow Expectations
 
 - OCR remains service-decoupled.
@@ -53,6 +67,12 @@ Default uninstall mode is conservative:
 - To purge all plugin options + custom post type data on uninstall, enable:
   - **Settings → Uninstall Cleanup → Purge plugin options/data when plugin is uninstalled**
 
+## Weekly Admin Digest (Optional Scaffold)
+
+- Disabled by default in settings.
+- Internal-only summary payload scaffold (no external telemetry).
+- Intended as a boundary for future optional scheduled digest workflows.
+
 ## Release Hygiene
 
 For each release:
@@ -61,3 +81,5 @@ For each release:
 2. Add changelog notes for operational/admin behavior changes.
 3. Keep smoke tests updated in CI.
 4. Remove release-noise artifacts from plugin root.
+
+For packaging automation details, see `docs/release-packaging.md`.

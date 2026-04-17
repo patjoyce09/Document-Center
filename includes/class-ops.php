@@ -149,6 +149,9 @@ final class DCB_Ops {
         $pack = dcb_ops_sample_template_pack();
         $validated = dcb_ops_validate_and_prepare_import(array('forms' => $pack), $existing_forms);
         if (empty($validated['ok'])) {
+            if (function_exists('dcb_ops_record_action')) {
+                dcb_ops_record_action('sample_pack_load', 'failed', 'Sample template pack failed validation.');
+            }
             self::redirect_with_message('No sample forms were imported.', true);
         }
 
@@ -162,6 +165,9 @@ final class DCB_Ops {
 
         update_option('dcb_forms_custom', $merged, false);
         $count = (int) (($validated['stats']['imported'] ?? 0));
+        if (function_exists('dcb_ops_record_action')) {
+            dcb_ops_record_action('sample_pack_load', 'ok', 'Loaded generic sample template pack.', array('imported' => $count));
+        }
         self::redirect_with_message('Loaded sample template pack (' . $count . ' forms).', false);
     }
 
@@ -184,12 +190,18 @@ final class DCB_Ops {
 
         $parsed = dcb_ops_parse_import_payload($raw_json);
         if (empty($parsed['ok'])) {
+            if (function_exists('dcb_ops_record_action')) {
+                dcb_ops_record_action('forms_import', 'failed', (string) (($parsed['errors'][0] ?? 'Import payload invalid.')));
+            }
             self::redirect_with_message((string) (($parsed['errors'][0] ?? 'Import payload invalid.')), true);
         }
 
         $existing_forms = dcb_get_custom_forms();
         $validated = dcb_ops_validate_and_prepare_import((array) ($parsed['payload'] ?? array()), $existing_forms);
         if (empty($validated['ok'])) {
+            if (function_exists('dcb_ops_record_action')) {
+                dcb_ops_record_action('forms_import', 'failed', (string) (($validated['errors'][0] ?? 'No valid forms were imported.')));
+            }
             self::redirect_with_message((string) (($validated['errors'][0] ?? 'No valid forms were imported.')), true);
         }
 
@@ -211,6 +223,13 @@ final class DCB_Ops {
         } else {
             $message .= '.';
         }
+        if (function_exists('dcb_ops_record_action')) {
+            dcb_ops_record_action('forms_import', 'ok', 'Forms import completed.', array(
+                'imported' => (int) (($validated['stats']['imported'] ?? 0)),
+                'warnings' => count($warnings),
+                'mode' => $mode,
+            ));
+        }
         self::redirect_with_message($message, false);
     }
 
@@ -226,7 +245,16 @@ final class DCB_Ops {
         $payload = dcb_ops_export_forms_payload($forms, array('source' => 'admin_export'));
         $json = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if (!is_string($json) || $json === '') {
+            if (function_exists('dcb_ops_record_action')) {
+                dcb_ops_record_action('forms_export', 'failed', 'Forms export payload could not be encoded.');
+            }
             wp_die('Export failed');
+        }
+
+        if (function_exists('dcb_ops_record_action')) {
+            dcb_ops_record_action('forms_export', 'ok', 'Forms export generated.', array(
+                'form_count' => is_array($forms) ? count($forms) : 0,
+            ));
         }
 
         if (function_exists('nocache_headers')) {

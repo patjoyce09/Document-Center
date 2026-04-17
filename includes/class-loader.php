@@ -22,6 +22,8 @@ require_once DCB_PLUGIN_DIR . 'includes/class-ops.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-workflow.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-integration-tutor.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-intake-trace.php';
+require_once DCB_PLUGIN_DIR . 'includes/class-chart-routing-connectors.php';
+require_once DCB_PLUGIN_DIR . 'includes/class-chart-routing.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-migrations.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-cli.php';
 
@@ -62,6 +64,7 @@ final class DCB_Loader {
         DCB_Workflow::init();
         DCB_Integration_Tutor::init();
         DCB_Intake_Trace::init();
+        DCB_Chart_Routing::init();
         DCB_Migrations::run();
         DCB_CLI::init();
     }

@@ -338,6 +338,32 @@ function dcb_ops_validate_and_prepare_import(array $payload, array $existing_for
     );
 }
 
+function dcb_ops_record_action(string $action, string $status, string $message, array $meta = array()): array {
+    $payload = array(
+        'action' => sanitize_key($action),
+        'status' => sanitize_key($status),
+        'message' => sanitize_text_field($message),
+        'time' => gmdate('c'),
+        'meta' => array(),
+    );
+
+    foreach ($meta as $key => $value) {
+        $meta_key = sanitize_key((string) $key);
+        if ($meta_key === '') {
+            continue;
+        }
+        if (is_scalar($value)) {
+            $payload['meta'][$meta_key] = sanitize_text_field((string) $value);
+        }
+    }
+
+    if (function_exists('update_option')) {
+        update_option('dcb_ops_last_action', $payload, false);
+    }
+
+    return $payload;
+}
+
 function dcb_ops_uninstall_should_purge(array $context = array()): bool {
     if (isset($context['purge'])) {
         return !empty($context['purge']);
