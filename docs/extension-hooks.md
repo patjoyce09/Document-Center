@@ -20,6 +20,7 @@ Return array shape:
 - `filename` (`string`)
 - `binary` (`string`)
 - `message` (`string`)
+- `contract_version` (`string`, recommended: `2.0`)
 
 ### `dcb_workflow_statuses`
 Override/extend workflow statuses.
@@ -48,6 +49,44 @@ Fires when an OCR review queue item is created from extraction results.
 **Arguments**
 1. `$review_id` (`int`)
 2. `$result` (`array`)
+
+### `dcb_output_templates`
+Extend output template registry for finalized/print rendering.
+
+**Arguments**
+1. `$templates` (`array`)
+
+### `dcb_output_template_key`
+Override selected output template key for a submission/render context.
+
+**Arguments**
+1. `$template_key` (`string`)
+2. `$submission_id` (`int`)
+3. `$normalized_submission` (`array`)
+4. `$view` (`string`)
+
+### `dcb_output_template_mapping`
+Adjust template mapping block used in normalized export metadata.
+
+**Arguments**
+1. `$mapping` (`array`)
+2. `$template_key` (`string`)
+3. `$signature` (`array`)
+
+### `dcb_signature_normalized_evidence`
+Mutate normalized signature evidence before persistence/use.
+
+**Arguments**
+1. `$normalized` (`array`)
+2. `$payload` (`array`)
+
+### `dcb_output_include_private_signature_meta`
+Control whether private request metadata (IP/user-agent) appears in rendered signature evidence.
+
+**Arguments**
+1. `$include` (`bool`)
+2. `$submission_id` (`int`)
+3. `$view` (`string`)
 
 ## Actions
 
@@ -127,3 +166,27 @@ Fires when reviewed OCR output is promoted to builder-compatible draft payload.
 **Arguments**
 1. `$review_id` (`int`)
 2. `$draft` (`array`)
+
+### `dcb_signature_evidence_persisted`
+Fires after signature evidence is normalized and persisted.
+
+**Arguments**
+1. `$submission_id` (`int`)
+2. `$normalized` (`array`)
+
+### `dcb_output_finalized`
+Fires when finalized output metadata/html is refreshed.
+
+**Arguments**
+1. `$submission_id` (`int`)
+2. `$template_key` (`string`)
+3. `$payload` (`array`)
+
+### `dcb_output_render_html`
+Filter rendered submission HTML for admin/final/print contexts.
+
+**Arguments**
+1. `$html` (`string`)
+2. `$submission_id` (`int`)
+3. `$view` (`string`)
+4. `$payload` (`array`)

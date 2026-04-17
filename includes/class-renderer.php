@@ -39,9 +39,9 @@ final class DCB_Renderer {
         self::guard('dcb_print_submission', $submission_id);
 
         dcb_finalize_submission_output($submission_id, get_current_user_id());
-        $rendered = (string) get_post_meta($submission_id, '_dcb_form_rendered_html', true);
+        $rendered = (string) get_post_meta($submission_id, '_dcb_form_rendered_html_final', true);
         if ($rendered === '') {
-            $rendered = dcb_render_submission_html($submission_id, 'print');
+            $rendered = dcb_render_submission_html($submission_id, 'final_print');
         }
 
         nocache_headers();
@@ -82,22 +82,18 @@ final class DCB_Renderer {
             wp_die('Could not export submission payload.');
         }
 
-        $adapter_result = apply_filters('dcb_pdf_export_adapter', array(
-            'ok' => false,
-            'mime' => 'application/pdf',
-            'filename' => 'dcb-submission-' . $submission_id . '.pdf',
-            'binary' => '',
-            'message' => 'No PDF adapter installed.',
-        ), $submission_id, $payload);
+        $adapter_default = dcb_pdf_export_adapter_default_contract($submission_id, $payload);
+        $adapter_result = apply_filters('dcb_pdf_export_adapter', $adapter_default, $submission_id, $payload);
+        $validated = dcb_pdf_export_adapter_validate_result($adapter_result);
 
-        if (!is_array($adapter_result) || empty($adapter_result['ok']) || !is_string($adapter_result['binary']) || $adapter_result['binary'] === '') {
-            wp_die(esc_html((string) ($adapter_result['message'] ?? 'PDF adapter failed.')));
+        if (empty($validated['ok'])) {
+            wp_die(esc_html((string) ($validated['message'] ?? 'PDF adapter failed.')));
         }
 
         nocache_headers();
-        header('Content-Type: ' . sanitize_text_field((string) ($adapter_result['mime'] ?? 'application/pdf')));
-        header('Content-Disposition: attachment; filename="' . sanitize_file_name((string) ($adapter_result['filename'] ?? ('dcb-submission-' . $submission_id . '.pdf'))) . '"');
-        echo $adapter_result['binary']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        header('Content-Type: ' . sanitize_text_field((string) ($validated['mime'] ?? 'application/pdf')));
+        header('Content-Disposition: attachment; filename="' . sanitize_file_name((string) ($validated['filename'] ?? ('dcb-submission-' . $submission_id . '.pdf'))) . '"');
+        echo $validated['binary']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
         exit;
     }
 }

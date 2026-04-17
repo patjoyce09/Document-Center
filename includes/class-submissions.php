@@ -262,6 +262,29 @@ final class DCB_Submissions {
         update_post_meta((int) $submission_id, '_dcb_form_signature_mode', $signature_mode);
         update_post_meta((int) $submission_id, '_dcb_form_signer_identity', $signer_identity);
         update_post_meta((int) $submission_id, '_dcb_form_signature_timestamp', $signature_timestamp_server);
+        $signature_payload = array(
+            'mode' => $signature_mode,
+            'signature_value' => (string) ($clean['signature_name'] ?? ''),
+            'signer_display_name' => $signer_identity,
+            'signer_user_id' => $user_id,
+            'signature_timestamp' => $signature_timestamp_server,
+            'signature_timestamp_client' => $signature_timestamp_client,
+            'signature_date' => (string) ($clean['signature_date'] ?? ''),
+            'signature_field_key' => 'signature_name',
+            'signature_source' => 'digital_form_submission',
+            'drawn_signature_hash' => $drawn_signature_hash,
+            'drawn_signature_available' => $drawn_signature_hash !== '',
+            'signature_drawn_data' => $signature_mode === 'drawn' ? $signature_drawn_data : '',
+            'consent_text_version' => $consent_text_version !== '' ? $consent_text_version : $policy_versions['consent_text_version'],
+            'attestation_text_version' => $attestation_text_version !== '' ? $attestation_text_version : $policy_versions['attestation_text_version'],
+            'payload_hash' => $payload_hash,
+            'ip' => $ip,
+            'user_agent' => mb_substr($ua, 0, 255),
+        );
+        if (class_exists('DCB_Signatures')) {
+            DCB_Signatures::persist_submission_signature((int) $submission_id, $signature_payload);
+        }
+
         $esign_evidence = array(
             'consent' => (string) ($clean['esign_consent'] ?? ''),
             'attestation' => (string) ($clean['attest_truth'] ?? ''),

@@ -41,6 +41,102 @@ function dcb_decode_json_meta($value): array {
     return is_array($decoded) ? $decoded : array();
 }
 
+function dcb_output_templates(): array {
+    $templates = array(
+        'dcb-digital-form-v1' => array(
+            'label' => 'Default Digital Form',
+            'header' => 'summary_header_v1',
+            'field_layout' => 'label_value_table_v1',
+            'signature_block' => 'signature_auto_v1',
+            'footer' => 'evidence_footer_v1',
+            'print_compact' => false,
+        ),
+        'dcb-digital-form-compact-v1' => array(
+            'label' => 'Compact Digital Form',
+            'header' => 'summary_header_v1',
+            'field_layout' => 'label_value_table_compact_v1',
+            'signature_block' => 'signature_auto_v1',
+            'footer' => 'evidence_footer_v1',
+            'print_compact' => true,
+        ),
+    );
+
+    return function_exists('apply_filters') ? (array) apply_filters('dcb_output_templates', $templates) : $templates;
+}
+
+function dcb_output_template_key_for_submission(int $submission_id, array $normalized_submission, string $view = 'admin'): string {
+    $existing = sanitize_key((string) get_post_meta($submission_id, '_dcb_output_template_key', true));
+    $default = $existing !== '' ? $existing : 'dcb-digital-form-v1';
+    $templates = dcb_output_templates();
+    if (!isset($templates[$default])) {
+        $default = 'dcb-digital-form-v1';
+    }
+
+    if (function_exists('apply_filters')) {
+        $default = sanitize_key((string) apply_filters('dcb_output_template_key', $default, $submission_id, $normalized_submission, $view));
+    }
+
+    return isset($templates[$default]) ? $default : 'dcb-digital-form-v1';
+}
+
+function dcb_output_template_mapping(string $template_key, array $signature): array {
+    $templates = dcb_output_templates();
+    $template = isset($templates[$template_key]) && is_array($templates[$template_key]) ? $templates[$template_key] : ($templates['dcb-digital-form-v1'] ?? array());
+    $signature_mode = sanitize_key((string) ($signature['mode'] ?? 'typed'));
+
+    $mapping = array(
+        'template_key' => $template_key,
+        'header' => (string) ($template['header'] ?? 'summary_header_v1'),
+        'field_layout' => (string) ($template['field_layout'] ?? 'label_value_table_v1'),
+        'signature_block' => $signature_mode === 'drawn' ? 'signature_drawn_block_v1' : 'signature_typed_block_v1',
+        'footer' => (string) ($template['footer'] ?? 'evidence_footer_v1'),
+        'print_compact' => !empty($template['print_compact']),
+        'output_contract_version' => '2.0',
+    );
+
+    return function_exists('apply_filters') ? (array) apply_filters('dcb_output_template_mapping', $mapping, $template_key, $signature) : $mapping;
+}
+
+function dcb_workflow_render_context(int $submission_id): array {
+    $status = sanitize_key((string) get_post_meta($submission_id, '_dcb_workflow_status', true));
+    if ($status === '') {
+        $status = 'submitted';
+    }
+
+    $timeline = get_post_meta($submission_id, '_dcb_workflow_timeline', true);
+    if (!is_array($timeline)) {
+        $timeline = array();
+    }
+
+    $approved_at = '';
+    $approved_by = '';
+    $workflow_finalized_at = '';
+    $workflow_finalized_by = '';
+    foreach ($timeline as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $event = sanitize_key((string) ($row['event'] ?? ''));
+        if ($event === 'approved') {
+            $approved_at = sanitize_text_field((string) ($row['time'] ?? ''));
+            $approved_by = sanitize_text_field((string) ($row['actor_name'] ?? ''));
+        }
+        if ($event === 'finalized') {
+            $workflow_finalized_at = sanitize_text_field((string) ($row['time'] ?? ''));
+            $workflow_finalized_by = sanitize_text_field((string) ($row['actor_name'] ?? ''));
+        }
+    }
+
+    return array(
+        'status' => $status,
+        'timeline_count' => count($timeline),
+        'approved_at' => $approved_at,
+        'approved_by' => $approved_by,
+        'workflow_finalized_at' => $workflow_finalized_at,
+        'workflow_finalized_by' => $workflow_finalized_by,
+    );
+}
+
 function dcb_get_submission_form_definition(int $submission_id): array {
     $snapshot = dcb_decode_json_meta(get_post_meta($submission_id, '_dcb_form_snapshot', true));
     if (!empty($snapshot)) {
@@ -134,39 +230,37 @@ function dcb_normalize_submission_payload(int $submission_id): array {
         );
     }
 
-    $signature_mode = sanitize_key((string) get_post_meta($submission_id, '_dcb_form_signature_mode', true));
-    if (!in_array($signature_mode, array('typed', 'drawn'), true)) {
-        $signature_mode = 'typed';
-    }
-
-    $signature_drawn_data = (string) get_post_meta($submission_id, '_dcb_form_signature_drawn_data', true);
-    $signature_drawn_hash = (string) get_post_meta($submission_id, '_dcb_form_signature_drawn_sha256', true);
-    if ($signature_drawn_hash === '' && $signature_drawn_data !== '') {
-        $signature_drawn_hash = hash('sha256', $signature_drawn_data);
-    }
-
-    $evidence = dcb_decode_json_meta(get_post_meta($submission_id, '_dcb_form_esign_evidence', true));
+    $signature = class_exists('DCB_Signatures')
+        ? DCB_Signatures::get_submission_signature($submission_id)
+        : array(
+            'mode' => sanitize_key((string) get_post_meta($submission_id, '_dcb_form_signature_mode', true)),
+            'signature_value' => (string) ($clean_data['signature_name'] ?? ''),
+            'signer_display_name' => (string) get_post_meta($submission_id, '_dcb_form_signer_identity', true),
+            'signer_user_id' => (int) get_post_meta($submission_id, '_dcb_form_submitted_by', true),
+            'signature_timestamp' => (string) get_post_meta($submission_id, '_dcb_form_signature_timestamp', true),
+            'signature_date' => (string) ($clean_data['signature_date'] ?? ''),
+            'drawn_signature_hash' => (string) get_post_meta($submission_id, '_dcb_form_signature_drawn_sha256', true),
+            'drawn_signature_available' => (string) get_post_meta($submission_id, '_dcb_form_signature_drawn_data', true) !== '',
+        );
 
     $consent_text_version = (string) get_post_meta($submission_id, '_dcb_form_consent_text_version', true);
     $attestation_text_version = (string) get_post_meta($submission_id, '_dcb_form_attestation_text_version', true);
     $policy_versions = dcb_get_policy_versions();
     if ($consent_text_version === '') {
-        $consent_text_version = (string) ($evidence['consentTextVersion'] ?? $policy_versions['consent_text_version']);
+        $consent_text_version = (string) ($signature['consent_text_version'] ?? $policy_versions['consent_text_version']);
     }
     if ($attestation_text_version === '') {
-        $attestation_text_version = (string) ($evidence['attestationTextVersion'] ?? $policy_versions['attestation_text_version']);
+        $attestation_text_version = (string) ($signature['attestation_text_version'] ?? $policy_versions['attestation_text_version']);
     }
 
+    $workflow_context = dcb_workflow_render_context($submission_id);
+    $output_version = (string) get_post_meta($submission_id, '_dcb_form_output_version', true);
+    if ($output_version === '' && defined('DCB_VERSION')) {
+        $output_version = DCB_VERSION;
+    }
+    $template_key = dcb_output_template_key_for_submission($submission_id, array(), 'final');
+
     $final_document_title = sprintf('%s — Final Submission #%d', $form_label !== '' ? $form_label : 'Digital Form', $submission_id);
-    $workflow_status = sanitize_key((string) get_post_meta($submission_id, '_dcb_workflow_status', true));
-    if ($workflow_status === '') {
-        $workflow_status = 'submitted';
-    }
-    $workflow_assignee = (int) get_post_meta($submission_id, '_dcb_workflow_assignee_user_id', true);
-    $workflow_timeline = get_post_meta($submission_id, '_dcb_workflow_timeline', true);
-    if (!is_array($workflow_timeline)) {
-        $workflow_timeline = array();
-    }
 
     $normalized = array(
         'submission_id' => $submission_id,
@@ -178,15 +272,19 @@ function dcb_normalize_submission_payload(int $submission_id): array {
         'hard_stop_passed' => (string) get_post_meta($submission_id, '_dcb_form_qa_passed', true) === '1',
         'fields' => $normalized_fields,
         'signature' => array(
-            'mode' => $signature_mode,
-            'typed_signature' => (string) ($clean_data['signature_name'] ?? ''),
-            'signer_identity' => (string) get_post_meta($submission_id, '_dcb_form_signer_identity', true),
-            'signature_date' => (string) ($clean_data['signature_date'] ?? ''),
-            'signature_timestamp' => (string) get_post_meta($submission_id, '_dcb_form_signature_timestamp', true),
-            'drawn_signature_hash' => $signature_drawn_hash,
-            'drawn_signature_available' => $signature_drawn_data !== '',
-            'ip' => (string) ($evidence['ip'] ?? ''),
-            'user_agent' => (string) ($evidence['userAgent'] ?? ''),
+            'mode' => (string) ($signature['mode'] ?? 'typed'),
+            'typed_signature' => (string) ($signature['signature_value'] ?? ''),
+            'signer_identity' => (string) ($signature['signer_display_name'] ?? ''),
+            'signer_user_id' => (int) ($signature['signer_user_id'] ?? 0),
+            'signature_date' => (string) ($signature['signature_date'] ?? ''),
+            'signature_timestamp' => (string) ($signature['signature_timestamp'] ?? ''),
+            'signature_timestamp_client' => (string) ($signature['signature_timestamp_client'] ?? ''),
+            'signature_field_key' => (string) ($signature['signature_field_key'] ?? 'signature_name'),
+            'signature_source' => (string) ($signature['signature_source'] ?? 'submission_form'),
+            'drawn_signature_hash' => (string) ($signature['drawn_signature_hash'] ?? ''),
+            'drawn_signature_available' => !empty($signature['drawn_signature_available']),
+            'ip' => (string) ($signature['ip'] ?? ''),
+            'user_agent' => (string) ($signature['user_agent'] ?? ''),
         ),
         'consent' => array(
             'consent_value' => (string) ($clean_data['esign_consent'] ?? ''),
@@ -195,26 +293,31 @@ function dcb_normalize_submission_payload(int $submission_id): array {
             'attestation_text_version' => $attestation_text_version,
         ),
         'payload_hash' => (string) get_post_meta($submission_id, '_dcb_form_payload_hash', true),
-        'workflow' => array(
-            'status' => $workflow_status,
-            'assignee_user_id' => $workflow_assignee,
-            'timeline_count' => count($workflow_timeline),
-        ),
+        'workflow' => $workflow_context,
         'finalization' => array(
             'finalized_at' => (string) get_post_meta($submission_id, '_dcb_form_finalized_at', true),
             'finalized_by' => (int) get_post_meta($submission_id, '_dcb_form_finalized_by', true),
-            'output_template' => 'dcb-digital-form-v1',
+            'finalized_by_name' => (string) get_post_meta($submission_id, '_dcb_form_finalized_by_name', true),
+            'output_version' => $output_version,
+            'output_template_key' => $template_key,
+            'approval_context' => array(
+                'approved_at' => (string) ($workflow_context['approved_at'] ?? ''),
+                'approved_by' => (string) ($workflow_context['approved_by'] ?? ''),
+                'workflow_status' => (string) ($workflow_context['status'] ?? ''),
+            ),
         ),
     );
 
+    $mapping = dcb_output_template_mapping($template_key, (array) ($normalized['signature'] ?? array()));
+
     return array(
         'normalized_submission_data' => $normalized,
-        'render_template_mapping' => array(
-            'template_key' => 'dcb-digital-form-v1',
-            'header' => 'summary_header_v1',
-            'field_layout' => 'label_value_table_v1',
-            'signature_block' => $signature_mode === 'drawn' ? 'signature_drawn_block_v1' : 'signature_typed_block_v1',
-            'footer' => 'evidence_footer_v1',
+        'render_template_mapping' => $mapping,
+        'export_context' => array(
+            'export_contract_version' => '2.0',
+            'output_template_key' => $template_key,
+            'output_version' => $output_version,
+            'finalized_at' => (string) ($normalized['finalization']['finalized_at'] ?? ''),
         ),
         'final_document_title' => $final_document_title,
     );
@@ -251,23 +354,67 @@ function dcb_render_template_block_html(array $block): string {
     return '<p style="margin:8px 0;white-space:pre-line;">' . esc_html($text) . '</p>';
 }
 
-function dcb_render_signature_section(array $signature, int $submission_id): string {
+function dcb_render_status_badge_html(string $status, string $view = 'admin'): string {
+    $status = sanitize_key($status);
+    if ($status === '') {
+        $status = 'submitted';
+    }
+
+    $palette = array(
+        'draft' => array('#f0f4fa', '#365079', '#cfd9ea'),
+        'submitted' => array('#eef6ff', '#0b4f94', '#b9d5f4'),
+        'in_review' => array('#fff7e8', '#8a5a00', '#f3d496'),
+        'needs_correction' => array('#fff1f1', '#8f1f1f', '#efb8b8'),
+        'approved' => array('#edf9f0', '#176a31', '#b3e3c0'),
+        'rejected' => array('#fff0f0', '#8f2222', '#f0b7b7'),
+        'finalized' => array('#e9f7f1', '#0f5b42', '#9ed7bf'),
+    );
+
+    $set = isset($palette[$status]) ? $palette[$status] : $palette['submitted'];
+    $label = strtoupper(str_replace('_', ' ', $status));
+    $weight = $status === 'approved' || $status === 'finalized' ? '800' : '700';
+    $padding = $view === 'print' || $view === 'final' ? '6px 12px' : '4px 8px';
+
+    return '<span style="display:inline-block;padding:' . esc_attr($padding) . ';border:1px solid ' . esc_attr($set[2]) . ';border-radius:999px;background:' . esc_attr($set[0]) . ';color:' . esc_attr($set[1]) . ';font-size:12px;font-weight:' . esc_attr($weight) . ';letter-spacing:.03em;">' . esc_html($label) . '</span>';
+}
+
+function dcb_render_signature_section(array $signature, int $submission_id, string $view = 'admin'): string {
     $mode = sanitize_key((string) ($signature['mode'] ?? 'typed'));
     $typed = (string) ($signature['typed_signature'] ?? '');
     $signer = (string) ($signature['signer_identity'] ?? '');
+    $signer_user_id = (int) ($signature['signer_user_id'] ?? 0);
     $signature_date = (string) ($signature['signature_date'] ?? '');
+    $signature_timestamp = (string) ($signature['signature_timestamp'] ?? '');
+    $signature_field_key = (string) ($signature['signature_field_key'] ?? 'signature_name');
+    $signature_source = (string) ($signature['signature_source'] ?? 'submission_form');
     $drawn_hash = (string) ($signature['drawn_signature_hash'] ?? '');
     $drawn = (string) get_post_meta($submission_id, '_dcb_form_signature_drawn_data', true);
+    $show_private = function_exists('apply_filters') ? (bool) apply_filters('dcb_output_include_private_signature_meta', $view !== 'public', $submission_id, $view) : true;
 
     $html = '<div style="margin-top:14px;">';
     $html .= '<h3 style="margin-top:0;">Signature Evidence</h3>';
     $html .= '<div style="display:grid;gap:6px;">';
     $html .= '<div><strong>Mode:</strong> ' . esc_html($mode !== '' ? $mode : 'typed') . '</div>';
-    $html .= '<div><strong>Signer Identity:</strong> ' . esc_html($signer !== '' ? $signer : '—') . '</div>';
+    $html .= '<div><strong>Signer:</strong> ' . esc_html($signer !== '' ? $signer : '—') . '</div>';
+    if ($signer_user_id > 0) {
+        $html .= '<div><strong>Signer User ID:</strong> ' . esc_html((string) $signer_user_id) . '</div>';
+    }
     $html .= '<div><strong>Typed Signature:</strong> ' . esc_html($typed !== '' ? $typed : '—') . '</div>';
     $html .= '<div><strong>Signature Date:</strong> ' . esc_html($signature_date !== '' ? $signature_date : '—') . '</div>';
+    $html .= '<div><strong>Signature Timestamp:</strong> ' . esc_html($signature_timestamp !== '' ? $signature_timestamp : '—') . '</div>';
+    $html .= '<div><strong>Signature Field:</strong> ' . esc_html($signature_field_key) . ' <strong style="margin-left:8px;">Source:</strong> ' . esc_html($signature_source) . '</div>';
     if ($drawn_hash !== '') {
         $html .= '<div><strong>Drawn Signature SHA256:</strong> <code>' . esc_html($drawn_hash) . '</code></div>';
+    }
+    if ($show_private) {
+        $ip = (string) ($signature['ip'] ?? '');
+        $ua = (string) ($signature['user_agent'] ?? '');
+        if ($ip !== '') {
+            $html .= '<div><strong>IP:</strong> ' . esc_html($ip) . '</div>';
+        }
+        if ($ua !== '') {
+            $html .= '<div><strong>User Agent:</strong> ' . esc_html($ua) . '</div>';
+        }
     }
     $html .= '</div>';
 
@@ -276,6 +423,38 @@ function dcb_render_signature_section(array $signature, int $submission_id): str
     }
 
     $html .= '</div>';
+    return $html;
+}
+
+function dcb_render_finalization_section(array $normalized, int $submission_id): string {
+    $finalization = isset($normalized['finalization']) && is_array($normalized['finalization']) ? $normalized['finalization'] : array();
+    $workflow = isset($normalized['workflow']) && is_array($normalized['workflow']) ? $normalized['workflow'] : array();
+
+    $finalized_by = (int) ($finalization['finalized_by'] ?? 0);
+    $finalized_by_name = sanitize_text_field((string) ($finalization['finalized_by_name'] ?? ''));
+    if ($finalized_by_name === '' && $finalized_by > 0) {
+        $user = get_user_by('id', $finalized_by);
+        if ($user instanceof WP_User) {
+            $finalized_by_name = (string) $user->display_name;
+        }
+    }
+
+    $html = '<div style="margin-top:14px;border:1px solid #dbe5ee;border-radius:8px;background:#f8fbff;padding:12px;">';
+    $html .= '<h3 style="margin-top:0;">Finalization Evidence</h3>';
+    $html .= '<ul style="margin:0;padding-left:18px;">';
+    $html .= '<li><strong>Finalized At:</strong> ' . esc_html((string) ($finalization['finalized_at'] ?? '—')) . '</li>';
+    $html .= '<li><strong>Finalized By:</strong> ' . esc_html($finalized_by_name !== '' ? $finalized_by_name : ($finalized_by > 0 ? 'User #' . $finalized_by : '—')) . '</li>';
+    $html .= '<li><strong>Output Version:</strong> ' . esc_html((string) ($finalization['output_version'] ?? '—')) . '</li>';
+    $html .= '<li><strong>Output Template:</strong> ' . esc_html((string) ($finalization['output_template_key'] ?? 'dcb-digital-form-v1')) . '</li>';
+    $html .= '<li><strong>Workflow Status:</strong> ' . esc_html((string) ($workflow['status'] ?? 'submitted')) . '</li>';
+    $approved_at = (string) ($finalization['approval_context']['approved_at'] ?? '');
+    $approved_by = (string) ($finalization['approval_context']['approved_by'] ?? '');
+    if ($approved_at !== '' || $approved_by !== '') {
+        $html .= '<li><strong>Approved Context:</strong> ' . esc_html(trim($approved_at . ($approved_by !== '' ? ' by ' . $approved_by : ''))) . '</li>';
+    }
+    $html .= '</ul>';
+    $html .= '</div>';
+
     return $html;
 }
 
@@ -340,7 +519,7 @@ function dcb_render_document_body(array $form_definition, array $field_values, a
         }
     }
 
-    $html .= dcb_render_signature_section($signature, $submission_id);
+    $html .= dcb_render_signature_section($signature, $submission_id, $view);
     $html .= '</div>';
 
     return $html;
@@ -376,18 +555,20 @@ function dcb_render_submission_html(int $submission_id, string $view = 'admin'):
         );
     }
 
-    $wrapper_class = $view === 'print' ? 'dcb-submission-print-wrap' : 'dcb-submission-admin-wrap';
+    $is_final_view = in_array($view, array('final', 'print', 'final_print'), true);
+    $wrapper_class = $is_final_view ? 'dcb-submission-final-wrap' : 'dcb-submission-admin-wrap';
     $html = '<div class="' . esc_attr($wrapper_class) . '">';
     $html .= '<h2>' . esc_html((string) ($payload['final_document_title'] ?? 'Digital Form Submission')) . '</h2>';
     $workflow_status = sanitize_key((string) ($normalized['workflow']['status'] ?? 'submitted'));
-    $status_label = strtoupper(str_replace('_', ' ', $workflow_status));
-    $html .= '<p><span style="display:inline-block;padding:4px 8px;border:1px solid #c8d4e8;border-radius:999px;background:#f5f8fc;font-size:12px;font-weight:700;letter-spacing:.02em;">STATUS: ' . esc_html($status_label) . '</span></p>';
+    $status_badge = dcb_render_status_badge_html($workflow_status, $is_final_view ? 'print' : 'admin');
+    $html .= '<p>' . $status_badge . ($is_final_view ? ' <span style="margin-left:8px;font-size:12px;color:#2e4a6f;">LOCKED FINAL RECORD</span>' : '') . '</p>';
     $html .= '<p><strong>Form:</strong> ' . esc_html((string) ($normalized['form_name'] ?? '')) . ' <strong style="margin-left:8px;">Version:</strong> ' . esc_html((string) ($normalized['form_version'] ?? 1)) . '</p>';
     $html .= '<p><strong>Submitter:</strong> ' . esc_html((string) (($normalized['submitter']['name'] ?? '') ?: ($normalized['submitter']['email'] ?? 'Unknown'))) . '</p>';
     $html .= '<p><strong>Submitted:</strong> ' . esc_html((string) ($normalized['submitted_timestamp'] ?? '')) . '</p>';
     $html .= '<p><strong>Payload Hash:</strong> <code>' . esc_html((string) ($normalized['payload_hash'] ?? '')) . '</code></p>';
 
     $html .= dcb_render_document_body($form_definition, $field_values, $sig, $submission_id, $view);
+    $html .= dcb_render_finalization_section($normalized, $submission_id);
     $html .= '<h3>Consent / Attestation</h3>';
     $html .= '<ul>';
     $html .= '<li><strong>Consent Value:</strong> ' . esc_html((string) ($consent['consent_value'] ?? '')) . '</li>';
@@ -397,7 +578,7 @@ function dcb_render_submission_html(int $submission_id, string $view = 'admin'):
     $html .= '</ul>';
     $html .= '</div>';
 
-    return $html;
+    return function_exists('apply_filters') ? (string) apply_filters('dcb_output_render_html', $html, $submission_id, $view, $payload) : $html;
 }
 
 function dcb_finalize_submission_output(int $submission_id, int $finalized_by = 0): void {
@@ -406,15 +587,74 @@ function dcb_finalize_submission_output(int $submission_id, int $finalized_by = 
         return;
     }
 
-    $rendered_html = dcb_render_submission_html($submission_id, 'print');
-    update_post_meta($submission_id, '_dcb_form_rendered_html', $rendered_html);
-    update_post_meta($submission_id, '_dcb_form_output_version', DCB_VERSION);
+    $template_key = dcb_output_template_key_for_submission($submission_id, (array) ($payload['normalized_submission_data'] ?? array()), 'final');
+    $rendered_final_html = dcb_render_submission_html($submission_id, 'final');
+    $rendered_admin_html = dcb_render_submission_html($submission_id, 'admin');
+
+    $finalized_by_name = '';
+    if ($finalized_by > 0) {
+        $user = get_user_by('id', $finalized_by);
+        if ($user instanceof WP_User) {
+            $finalized_by_name = (string) $user->display_name;
+        }
+    }
+
+    update_post_meta($submission_id, '_dcb_form_rendered_html', $rendered_final_html);
+    update_post_meta($submission_id, '_dcb_form_rendered_html_final', $rendered_final_html);
+    update_post_meta($submission_id, '_dcb_form_rendered_html_admin', $rendered_admin_html);
+    update_post_meta($submission_id, '_dcb_form_output_version', defined('DCB_VERSION') ? DCB_VERSION : '0');
     update_post_meta($submission_id, '_dcb_form_finalized_at', current_time('mysql'));
     update_post_meta($submission_id, '_dcb_form_finalized_by', max(0, $finalized_by));
+    update_post_meta($submission_id, '_dcb_form_finalized_by_name', $finalized_by_name);
     update_post_meta($submission_id, '_dcb_form_final_document_title', (string) ($payload['final_document_title'] ?? 'Digital Form Submission'));
     update_post_meta($submission_id, '_dcb_form_normalized_export', wp_json_encode((array) ($payload['normalized_submission_data'] ?? array())));
     update_post_meta($submission_id, '_dcb_form_render_template_mapping', wp_json_encode((array) ($payload['render_template_mapping'] ?? array())));
-    update_post_meta($submission_id, '_dcb_output_template_key', 'dcb-digital-form-v1');
+    update_post_meta($submission_id, '_dcb_output_template_key', $template_key);
+    update_post_meta($submission_id, '_dcb_output_contract_version', '2.0');
+
+    if (function_exists('do_action')) {
+        do_action('dcb_output_finalized', $submission_id, $template_key, $payload);
+    }
+}
+
+function dcb_pdf_export_adapter_default_contract(int $submission_id, array $payload): array {
+    return array(
+        'ok' => false,
+        'mime' => 'application/pdf',
+        'filename' => 'dcb-submission-' . $submission_id . '.pdf',
+        'binary' => '',
+        'message' => 'No PDF adapter installed.',
+        'contract_version' => '2.0',
+        'submission_id' => $submission_id,
+        'payload' => $payload,
+    );
+}
+
+function dcb_pdf_export_adapter_validate_result($adapter_result): array {
+    if (!is_array($adapter_result)) {
+        return array('ok' => false, 'message' => 'PDF adapter returned non-array response.');
+    }
+
+    $ok = !empty($adapter_result['ok']);
+    $binary = isset($adapter_result['binary']) && is_string($adapter_result['binary']) ? $adapter_result['binary'] : '';
+    $mime = isset($adapter_result['mime']) && is_string($adapter_result['mime']) ? $adapter_result['mime'] : 'application/pdf';
+    $filename = isset($adapter_result['filename']) && is_string($adapter_result['filename']) ? $adapter_result['filename'] : 'document.pdf';
+    $message = isset($adapter_result['message']) && is_string($adapter_result['message']) ? $adapter_result['message'] : '';
+
+    if (!$ok) {
+        return array('ok' => false, 'message' => $message !== '' ? $message : 'PDF adapter reported failure.');
+    }
+    if ($binary === '') {
+        return array('ok' => false, 'message' => 'PDF adapter returned empty binary payload.');
+    }
+
+    return array(
+        'ok' => true,
+        'mime' => $mime,
+        'filename' => $filename,
+        'binary' => $binary,
+        'message' => $message,
+    );
 }
 
 function dcb_send_submission_notification(int $submission_id): array {

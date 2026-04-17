@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.8
+Stable tag: 0.2.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,18 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.9 =
+* Implemented signature service layer with normalized signature evidence persistence/retrieval and backward-compatible legacy evidence fallback.
+* Expanded signature evidence model to include signer display name/user id, signature timestamps, mode, signature field/source context, and optional private request metadata.
+* Added stronger finalized document experience with locked final rendering path and dedicated finalization evidence section.
+* Improved print/final record output with clearer status badges and finalized record presentation.
+* Added output template registry/selection architecture with default + compact templates and template selection/mapping filters.
+* Strengthened normalized export metadata with output contract version, output version/template key, finalized context, and approval/workflow context.
+* Hardened PDF adapter contract handling with explicit default contract + validator helpers while preserving adapter boundary.
+* Persisted richer finalization metadata (`finalized_at`, `finalized_by`, `finalized_by_name`, `output_version`, `output_template_key`, output contract version).
+* Added focused output/signatures smoke test and CI coverage.
+* Removed release-noise artifact `test.txt` from plugin root.
+
 = 0.2.8 =
 * Added OCR review item operational status model: `pending_review`, `corrected`, `approved`, `rejected`, `reprocessed`.
 * Added OCR review queue admin operations: approve, corrected, reject, reprocess OCR, and promote reviewed draft payload.
