@@ -49,6 +49,10 @@ final class DCB_Settings {
             'dcb_ocr_correction_rules' => array(),
             'dcb_chart_routing_mode' => 'none_manual',
             'dcb_chart_routing_connector_config' => array(),
+            'dcb_chart_routing_connector_secret' => '',
+            'dcb_chart_routing_require_confirmation' => '1',
+            'dcb_chart_routing_max_retry_attempts' => 3,
+            'dcb_chart_routing_last_connector_validation' => array(),
             'dcb_tutor_integration_enabled' => '0',
             'dcb_tutor_mapping' => array(),
             'dcb_uninstall_remove_data' => '0',
@@ -84,6 +88,10 @@ final class DCB_Settings {
         register_setting('dcb_settings_group', 'dcb_ocr_correction_rules');
         register_setting('dcb_settings_group', 'dcb_chart_routing_mode');
         register_setting('dcb_settings_group', 'dcb_chart_routing_connector_config');
+        register_setting('dcb_settings_group', 'dcb_chart_routing_connector_secret');
+        register_setting('dcb_settings_group', 'dcb_chart_routing_require_confirmation');
+        register_setting('dcb_settings_group', 'dcb_chart_routing_max_retry_attempts');
+        register_setting('dcb_settings_group', 'dcb_chart_routing_last_connector_validation');
         register_setting('dcb_settings_group', 'dcb_tutor_integration_enabled');
         register_setting('dcb_settings_group', 'dcb_tutor_mapping');
         register_setting('dcb_settings_group', 'dcb_uninstall_remove_data');

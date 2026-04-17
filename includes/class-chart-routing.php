@@ -11,6 +11,7 @@ final class DCB_Chart_Routing {
         add_action('init', array(__CLASS__, 'register_post_type'), 22);
         add_action('admin_menu', array(__CLASS__, 'register_admin_page'));
         add_action('admin_post_dcb_chart_routing_action', array(__CLASS__, 'handle_queue_action'));
+        add_action('admin_post_dcb_chart_routing_test_connector', array(__CLASS__, 'handle_test_connector'));
         add_action('dcb_upload_artifact_logged', array(__CLASS__, 'handle_upload_artifact_logged'), 10, 2);
         add_action('dcb_ocr_review_status_changed', array(__CLASS__, 'handle_ocr_review_status_changed'), 20, 4);
     }
@@ -67,6 +68,10 @@ final class DCB_Chart_Routing {
 
     private static function can_act_on_queue(): bool {
         return DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_WORKFLOWS);
+    }
+
+    private static function can_test_connector(): bool {
+        return DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_SETTINGS);
     }
 
     public static function handle_upload_artifact_logged(int $upload_log_id, array $context = array()): void {
@@ -241,7 +246,9 @@ final class DCB_Chart_Routing {
 
     private static function connector(): DCB_Chart_Routing_Connector_Interface {
         $mode = self::connector_mode();
-        $config = get_option('dcb_chart_routing_connector_config', array());
+        $config = function_exists('dcb_chart_routing_resolved_connector_config')
+            ? dcb_chart_routing_resolved_connector_config()
+            : array();
         if (!is_array($config)) {
             $config = array();
         }
@@ -279,6 +286,44 @@ final class DCB_Chart_Routing {
             echo '<div class="notice notice-error"><p>' . esc_html(sanitize_text_field((string) $_GET['dcb_chart_route_error'])) . '</p></div>';
         }
 
+        $resolved_config = function_exists('dcb_chart_routing_resolved_connector_config')
+            ? dcb_chart_routing_resolved_connector_config()
+            : array();
+        $provider_key = sanitize_key((string) ($resolved_config['provider_key'] ?? ''));
+        $api_base_url = sanitize_text_field((string) ($resolved_config['api_base_url'] ?? ''));
+        $secret_masked = '';
+        if (isset($resolved_config['api_token']) && is_scalar($resolved_config['api_token']) && function_exists('dcb_chart_routing_mask_secret')) {
+            $secret_masked = dcb_chart_routing_mask_secret((string) $resolved_config['api_token']);
+        }
+        $last_validation = get_option('dcb_chart_routing_last_connector_validation', array());
+        if (!is_array($last_validation)) {
+            $last_validation = array();
+        }
+
+        echo '<h2>Connector Readiness</h2>';
+        echo '<p>Mode: <strong>' . esc_html(self::connector_mode()) . '</strong> &nbsp; Provider: <strong>' . esc_html($provider_key !== '' ? $provider_key : 'none') . '</strong></p>';
+        echo '<p>API Base URL: <strong>' . esc_html($api_base_url !== '' ? $api_base_url : 'not set') . '</strong> &nbsp; Secret: <strong>' . esc_html($secret_masked !== '' ? $secret_masked : 'not set') . '</strong></p>';
+        if (!empty($last_validation)) {
+            $val_ok = !empty($last_validation['ok']);
+            $val_errors = isset($last_validation['errors']) && is_array($last_validation['errors']) ? $last_validation['errors'] : array();
+            $val_warnings = isset($last_validation['warnings']) && is_array($last_validation['warnings']) ? $last_validation['warnings'] : array();
+            echo '<p>Last Validation: <strong>' . esc_html($val_ok ? 'ready' : 'not ready') . '</strong> at ' . esc_html((string) ($last_validation['checked_at'] ?? '')) . '</p>';
+            if (!empty($val_errors)) {
+                echo '<p style="color:#b32d2e"><strong>Errors:</strong> ' . esc_html(implode(' | ', array_map('sanitize_text_field', $val_errors))) . '</p>';
+            }
+            if (!empty($val_warnings)) {
+                echo '<p><strong>Warnings:</strong> ' . esc_html(implode(' | ', array_map('sanitize_text_field', $val_warnings))) . '</p>';
+            }
+        }
+
+        if (self::can_test_connector()) {
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin:0 0 16px;">';
+            wp_nonce_field('dcb_chart_routing_test_connector', 'dcb_chart_routing_test_nonce');
+            echo '<input type="hidden" name="action" value="dcb_chart_routing_test_connector" />';
+            submit_button('Test Connector Readiness', 'secondary', 'submit', false);
+            echo '</form>';
+        }
+
         echo '<table class="widefat striped"><thead><tr>';
         echo '<th style="width:65px">Queue ID</th>';
         echo '<th style="width:180px">Artifact / Trace</th>';
@@ -311,6 +356,10 @@ final class DCB_Chart_Routing {
             $confidence_score = (float) get_post_meta($queue_id, '_dcb_chart_route_confidence_score', true);
             $doc_type = get_post_meta($queue_id, '_dcb_chart_route_document_type', true);
             $doc_type_key = is_array($doc_type) ? dcb_chart_routing_normalize_document_type((string) ($doc_type['document_type'] ?? 'miscellaneous')) : 'miscellaneous';
+            $last_state = sanitize_key((string) get_post_meta($queue_id, '_dcb_chart_route_last_result_state', true));
+            $retry_count = max(0, (int) get_post_meta($queue_id, '_dcb_chart_route_retry_count', true));
+            $failure_reason = sanitize_key((string) get_post_meta($queue_id, '_dcb_chart_route_last_failure_reason', true));
+            $last_attempt_at = sanitize_text_field((string) get_post_meta($queue_id, '_dcb_chart_route_last_attempt_at', true));
 
             $artifact_name = sanitize_text_field((string) get_post_meta($upload_log_id, '_dcb_upload_title', true));
             $artifact_link = $upload_log_id > 0 ? admin_url('post.php?post=' . $upload_log_id . '&action=edit') : '';
@@ -330,7 +379,20 @@ final class DCB_Chart_Routing {
             echo '<td>' . wp_kses_post(self::render_candidate_list($candidates)) . '</td>';
             echo '<td><strong>' . esc_html(ucwords(str_replace('_', ' ', $confidence_tier))) . '</strong><br /><small>' . esc_html(number_format($confidence_score, 3)) . '</small></td>';
             echo '<td>' . esc_html((string) (dcb_chart_routing_document_types()[$doc_type_key] ?? 'Miscellaneous')) . '</td>';
-            echo '<td>' . esc_html(ucwords(str_replace('_', ' ', $status))) . '</td>';
+            echo '<td>' . esc_html(ucwords(str_replace('_', ' ', $status)));
+            if ($last_state !== '') {
+                echo '<br /><small>Result: ' . esc_html($last_state) . '</small>';
+            }
+            if ($retry_count > 0) {
+                echo '<br /><small>Retries: ' . esc_html((string) $retry_count) . '</small>';
+            }
+            if ($failure_reason !== '') {
+                echo '<br /><small>Failure: ' . esc_html($failure_reason) . '</small>';
+            }
+            if ($last_attempt_at !== '') {
+                echo '<br /><small>Last Try: ' . esc_html($last_attempt_at) . '</small>';
+            }
+            echo '</td>';
 
             echo '<td>';
             if (!self::can_act_on_queue()) {
@@ -344,6 +406,48 @@ final class DCB_Chart_Routing {
 
         echo '</tbody></table>';
         echo '</div>';
+    }
+
+    public static function handle_test_connector(): void {
+        if (!self::can_test_connector()) {
+            wp_die('Unauthorized');
+        }
+
+        if (!isset($_POST['dcb_chart_routing_test_nonce']) || !wp_verify_nonce((string) $_POST['dcb_chart_routing_test_nonce'], 'dcb_chart_routing_test_connector')) {
+            wp_die('Security check failed');
+        }
+
+        $mode = self::connector_mode();
+        $config = function_exists('dcb_chart_routing_resolved_connector_config')
+            ? dcb_chart_routing_resolved_connector_config()
+            : array();
+        $connector = self::connector();
+        $validation_raw = $connector->validate_connector_config($config);
+        if (!is_array($validation_raw)) {
+            $validation_raw = array('ok' => false, 'errors' => array('Connector returned invalid validation payload.'), 'warnings' => array());
+        }
+
+        $validation = function_exists('dcb_chart_routing_validation_payload_shape')
+            ? dcb_chart_routing_validation_payload_shape(array_merge($validation_raw, array(
+                'mode' => $mode,
+                'provider_key' => sanitize_key((string) ($config['provider_key'] ?? '')),
+                'checked_at' => current_time('mysql'),
+            )))
+            : $validation_raw;
+
+        update_option('dcb_chart_routing_last_connector_validation', $validation, false);
+
+        $notice = !empty($validation['ok'])
+            ? 'Connector readiness test passed.'
+            : 'Connector readiness test found issues.';
+        $args = array('page' => 'dcb-chart-routing');
+        if (!empty($validation['ok'])) {
+            $args['dcb_chart_route_notice'] = rawurlencode($notice);
+        } else {
+            $args['dcb_chart_route_error'] = rawurlencode($notice);
+        }
+        wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
+        exit;
     }
 
     private static function render_identifier_list(array $identifiers): string {
@@ -422,6 +526,7 @@ final class DCB_Chart_Routing {
         echo '<button class="button" type="submit" name="task" value="queue_manual_review">Queue Manual Review</button>';
         echo '<button class="button" type="submit" name="task" value="mark_no_reliable_match">No Reliable Match</button>';
         echo '<button class="button button-primary" type="submit" name="task" value="route_attach">Route / Attach</button>';
+        echo '<button class="button" type="submit" name="task" value="retry_attach">Retry Attach</button>';
         echo '</p>';
 
         echo '</form>';
@@ -464,6 +569,16 @@ final class DCB_Chart_Routing {
             update_post_meta($queue_id, '_dcb_chart_route_selected_candidate', $selected);
             update_post_meta($queue_id, '_dcb_chart_route_status', 'match_confirmed');
             update_post_meta($queue_id, '_dcb_chart_route_selected_document_type', $document_type);
+            self::store_connector_result($queue_id, array(
+                'state' => 'confirmed',
+                'attempted' => false,
+                'confirmed' => true,
+                'attached' => false,
+                'retry_count' => max(0, (int) get_post_meta($queue_id, '_dcb_chart_route_retry_count', true)),
+                'message' => $task === 'confirm_match' ? 'Top match confirmed.' : 'Alternate candidate selected.',
+                'confirmed_at' => current_time('mysql'),
+                'updated_at' => current_time('mysql'),
+            ));
             self::append_audit($queue_id, $task, array(
                 'chosen_patient_target' => $selected,
                 'chosen_document_type' => $document_type,
@@ -475,6 +590,15 @@ final class DCB_Chart_Routing {
             $message = $task === 'confirm_match' ? 'Match confirmed.' : 'Alternate candidate selected.';
         } elseif ($task === 'queue_manual_review') {
             update_post_meta($queue_id, '_dcb_chart_route_status', 'manual_review');
+            self::store_connector_result($queue_id, array(
+                'state' => 'confirmed',
+                'attempted' => false,
+                'confirmed' => false,
+                'attached' => false,
+                'retry_count' => max(0, (int) get_post_meta($queue_id, '_dcb_chart_route_retry_count', true)),
+                'message' => 'Queued for manual review.',
+                'updated_at' => current_time('mysql'),
+            ));
             self::append_audit($queue_id, 'queue_manual_review', array(
                 'route_method' => self::route_method(),
                 'result' => 'queued_manual_review',
@@ -484,6 +608,16 @@ final class DCB_Chart_Routing {
             $message = 'Queued for manual review.';
         } elseif ($task === 'mark_no_reliable_match') {
             update_post_meta($queue_id, '_dcb_chart_route_status', 'no_reliable_match');
+            self::store_connector_result($queue_id, array(
+                'state' => 'failed',
+                'attempted' => false,
+                'confirmed' => false,
+                'attached' => false,
+                'retry_count' => max(0, (int) get_post_meta($queue_id, '_dcb_chart_route_retry_count', true)),
+                'failure_reason' => 'no_reliable_match',
+                'message' => 'Marked no reliable match.',
+                'updated_at' => current_time('mysql'),
+            ));
             self::append_audit($queue_id, 'mark_no_reliable_match', array(
                 'route_method' => self::route_method(),
                 'result' => 'no_reliable_match',
@@ -491,13 +625,18 @@ final class DCB_Chart_Routing {
                 'note' => $routing_note,
             ));
             $message = 'Marked no reliable match.';
-        } elseif ($task === 'route_attach') {
+        } elseif ($task === 'route_attach' || $task === 'retry_attach') {
             if (empty($selected)) {
                 $error = 'No patient/chart candidate selected.';
+            } elseif (function_exists('dcb_chart_routing_requires_confirmation') && dcb_chart_routing_requires_confirmation() && $status !== 'match_confirmed') {
+                $error = 'Human confirmation is required before route/attach.';
             } else {
                 $connector = self::connector();
                 $upload_log_id = (int) get_post_meta($queue_id, '_dcb_chart_route_source_upload_log_id', true);
                 $trace_id = sanitize_text_field((string) get_post_meta($queue_id, '_dcb_chart_route_trace_id', true));
+                $retry_count = max(0, (int) get_post_meta($queue_id, '_dcb_chart_route_retry_count', true)) + 1;
+                $max_retry = function_exists('dcb_chart_routing_max_retry_attempts') ? dcb_chart_routing_max_retry_attempts() : 3;
+                $attempted_at = current_time('mysql');
                 $artifact = array(
                     'upload_log_id' => $upload_log_id,
                     'trace_id' => $trace_id,
@@ -506,6 +645,19 @@ final class DCB_Chart_Routing {
                     'mime' => sanitize_text_field((string) get_post_meta($upload_log_id, '_dcb_upload_mime', true)),
                 );
 
+                self::store_connector_result($queue_id, array(
+                    'state' => 'attempted',
+                    'attempted' => true,
+                    'confirmed' => true,
+                    'attached' => false,
+                    'retry_count' => $retry_count,
+                    'retryable' => true,
+                    'message' => 'Route/attach attempt started.',
+                    'attempted_at' => $attempted_at,
+                    'updated_at' => $attempted_at,
+                ));
+                update_post_meta($queue_id, '_dcb_chart_route_status', 'route_attempted');
+
                 $resolve = $connector->resolve_chart_target($selected, array(
                     'queue_id' => $queue_id,
                     'document_type' => $document_type,
@@ -513,7 +665,24 @@ final class DCB_Chart_Routing {
 
                 if (empty($resolve['ok'])) {
                     $error = sanitize_text_field((string) ($resolve['message'] ?? 'Could not resolve chart target.'));
-                    update_post_meta($queue_id, '_dcb_chart_route_status', 'route_failed');
+                    $state = function_exists('dcb_chart_routing_resolve_result_state')
+                        ? dcb_chart_routing_resolve_result_state(false, 'failed', $retry_count, $max_retry)
+                        : ($retry_count < $max_retry ? 'retry_pending' : 'failed');
+                    self::store_connector_result($queue_id, array(
+                        'state' => $state,
+                        'attempted' => true,
+                        'confirmed' => true,
+                        'attached' => false,
+                        'retry_count' => $retry_count,
+                        'retryable' => $state === 'retry_pending',
+                        'failure_reason' => 'resolve_target_failed',
+                        'message' => $error,
+                        'attempted_at' => $attempted_at,
+                        'failed_at' => current_time('mysql'),
+                        'retry_pending_at' => $state === 'retry_pending' ? current_time('mysql') : '',
+                        'updated_at' => current_time('mysql'),
+                    ));
+                    update_post_meta($queue_id, '_dcb_chart_route_status', $state === 'retry_pending' ? 'route_retry_pending' : 'route_failed');
                     self::append_audit($queue_id, 'route_attach', array(
                         'chosen_patient_target' => $selected,
                         'chosen_document_type' => $document_type,
@@ -530,24 +699,60 @@ final class DCB_Chart_Routing {
                     ));
 
                     $ok = !empty($attach['ok']);
+                    $requested_state = sanitize_key((string) ($attach['state'] ?? ($ok ? 'attached' : 'failed')));
+                    $resolved_state = function_exists('dcb_chart_routing_resolve_result_state')
+                        ? dcb_chart_routing_resolve_result_state($ok, $requested_state, $retry_count, $max_retry)
+                        : ($ok ? 'attached' : ($retry_count < $max_retry ? 'retry_pending' : 'failed'));
+                    $failure_reason = sanitize_key((string) ($attach['failure_reason'] ?? ($ok ? '' : 'attach_failed')));
+                    $result_message = sanitize_text_field((string) ($attach['message'] ?? ($ok ? 'Routed.' : 'Route failed.')));
+                    if (function_exists('dcb_chart_routing_redact_sensitive_text')) {
+                        $result_message = dcb_chart_routing_redact_sensitive_text($result_message);
+                    }
+
                     update_post_meta($queue_id, '_dcb_chart_route_selected_candidate', $selected);
                     update_post_meta($queue_id, '_dcb_chart_route_selected_document_type', $document_type);
                     update_post_meta($queue_id, '_dcb_chart_route_result', is_array($attach) ? $attach : array());
-                    update_post_meta($queue_id, '_dcb_chart_route_status', $ok ? 'routed' : 'route_failed');
+
+                    self::store_connector_result($queue_id, array(
+                        'state' => $resolved_state,
+                        'attempted' => true,
+                        'confirmed' => true,
+                        'attached' => $ok,
+                        'retry_count' => $retry_count,
+                        'retryable' => !$ok && $resolved_state === 'retry_pending',
+                        'failure_reason' => $failure_reason,
+                        'message' => $result_message,
+                        'external_reference' => sanitize_text_field((string) ($attach['external_reference'] ?? '')),
+                        'attempted_at' => $attempted_at,
+                        'attached_at' => $ok ? current_time('mysql') : '',
+                        'failed_at' => $ok ? '' : current_time('mysql'),
+                        'retry_pending_at' => (!$ok && $resolved_state === 'retry_pending') ? current_time('mysql') : '',
+                        'updated_at' => current_time('mysql'),
+                    ));
+
+                    if ($resolved_state === 'attached') {
+                        update_post_meta($queue_id, '_dcb_chart_route_status', 'routed');
+                    } elseif ($resolved_state === 'retry_pending') {
+                        update_post_meta($queue_id, '_dcb_chart_route_status', 'route_retry_pending');
+                    } else {
+                        update_post_meta($queue_id, '_dcb_chart_route_status', 'route_failed');
+                    }
 
                     self::append_audit($queue_id, 'route_attach', array(
                         'chosen_patient_target' => $selected,
                         'chosen_document_type' => $document_type,
                         'route_method' => self::route_method(),
-                        'result' => $ok ? 'success' : 'failed',
-                        'result_message' => sanitize_text_field((string) ($attach['message'] ?? ($ok ? 'Routed.' : 'Route failed.'))),
+                        'result' => $ok ? 'success' : ($resolved_state === 'retry_pending' ? 'retry_pending' : 'failed'),
+                        'result_message' => $result_message,
                         'note' => $routing_note,
                     ));
 
-                    if ($ok) {
+                    if ($resolved_state === 'attached') {
                         $message = 'Route operation recorded.';
+                    } elseif ($resolved_state === 'retry_pending') {
+                        $error = $result_message !== '' ? $result_message : 'Route failed and is pending retry.';
                     } else {
-                        $error = sanitize_text_field((string) ($attach['message'] ?? 'Route failed.'));
+                        $error = $result_message !== '' ? $result_message : 'Route failed.';
                     }
                 }
             }
@@ -637,6 +842,29 @@ final class DCB_Chart_Routing {
             );
         }
         return $summary;
+    }
+
+    private static function store_connector_result(int $queue_id, array $payload): array {
+        $normalized = function_exists('dcb_chart_routing_route_result_payload_shape')
+            ? dcb_chart_routing_route_result_payload_shape($payload)
+            : $payload;
+
+        $message = sanitize_text_field((string) ($normalized['message'] ?? ''));
+        if (function_exists('dcb_chart_routing_redact_sensitive_text')) {
+            $message = dcb_chart_routing_redact_sensitive_text($message);
+        }
+        $normalized['message'] = $message;
+
+        update_post_meta($queue_id, '_dcb_chart_route_connector_result', $normalized);
+        update_post_meta($queue_id, '_dcb_chart_route_last_result_state', sanitize_key((string) ($normalized['state'] ?? 'attempted')));
+        update_post_meta($queue_id, '_dcb_chart_route_last_connector_message', $message);
+        update_post_meta($queue_id, '_dcb_chart_route_last_failure_reason', sanitize_key((string) ($normalized['failure_reason'] ?? '')));
+        update_post_meta($queue_id, '_dcb_chart_route_retry_count', max(0, (int) ($normalized['retry_count'] ?? 0)));
+        update_post_meta($queue_id, '_dcb_chart_route_last_attempt_at', sanitize_text_field((string) ($normalized['attempted_at'] ?? '')));
+        update_post_meta($queue_id, '_dcb_chart_route_last_attached_at', sanitize_text_field((string) ($normalized['attached_at'] ?? '')));
+        update_post_meta($queue_id, '_dcb_chart_route_last_connector_result', $normalized);
+
+        return $normalized;
     }
 
     private static function append_audit(int $queue_id, string $event, array $payload): void {

@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.9
+Stable tag: 0.3.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -24,6 +24,7 @@ Document Center Builder provides:
 - OCR diagnostics, capability checks, and OCR review queue
 - Generic upload portal + routing rules
 - Document-to-chart routing prototype queue with confidence-tiered matching and connector boundary
+- Real connector skeleton package with secure config/secret boundary and retry-ready attach state tracking
 - Setup & operations admin surface with first-run readiness checks
 - Generic sample template pack and validated forms import/export flow
 - Compact system health snapshot panel with action links
@@ -53,6 +54,15 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.10 =
+* Added real connector package skeleton under `providers/real-connector-skeleton` using hook-based adapter injection (`api` mode + provider key) without vendor lock-in in core classes.
+* Added secure chart-routing config boundary separating public connector config from sealed secret storage with masked admin display.
+* Added safe connector readiness test flow with normalized validation payload and last-validation observability.
+* Added retry-ready route/attach result model (`attempted`, `confirmed`, `attached`, `failed`, `retry_pending`) with retry counts, failure reasons, and timestamps.
+* Added route/attach observability metadata for last connector result state, failure reason, retry count, and attempt/attach timestamps.
+* Enforced human confirmation guardrail before route/attach by default.
+* Added smoke tests for connector validation, secure masking, route result payload shaping, retry-state handling, and connector-test capability enforcement.
+
 = 0.3.9 =
 * Added first EMR-facing Document-to-Chart Routing prototype with isolated queue and audit trail (upload/import -> extract identifiers -> candidate matching -> confirm/route workflow).
 * Added generic matching model (MRN/patient ID, name + DOB, visit/service date, clinician) with confidence tiers (`high_confidence`, `medium_confidence`, `low_confidence`, `no_match`) and name-only guardrail.

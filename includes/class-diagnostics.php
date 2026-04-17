@@ -48,6 +48,7 @@ final class DCB_Diagnostics {
         self::render_text_row('OCR Max File Size (MB)', 'dcb_ocr_max_file_size_mb', $field('dcb_ocr_max_file_size_mb'));
         self::render_text_row('OCR Confidence Threshold', 'dcb_ocr_confidence_threshold', $field('dcb_ocr_confidence_threshold'));
         self::render_text_row('Chart Routing Mode (none_manual|api|bot|report_import)', 'dcb_chart_routing_mode', $field('dcb_chart_routing_mode'));
+        self::render_text_row('Chart Routing Max Retry Attempts (1-10)', 'dcb_chart_routing_max_retry_attempts', $field('dcb_chart_routing_max_retry_attempts'));
         self::render_text_row('Tesseract Path', 'dcb_upload_tesseract_path', $field('dcb_upload_tesseract_path'));
         self::render_text_row('pdftotext Path', 'dcb_upload_pdftotext_path', $field('dcb_upload_pdftotext_path'));
         self::render_text_row('pdftoppm Path', 'dcb_upload_pdftoppm_path', $field('dcb_upload_pdftoppm_path'));
@@ -56,9 +57,23 @@ final class DCB_Diagnostics {
         if (!is_array($chart_connector_config)) {
             $chart_connector_config = array();
         }
+        $chart_connector_display = function_exists('dcb_chart_routing_connector_config_for_display')
+            ? dcb_chart_routing_connector_config_for_display($chart_connector_config)
+            : $chart_connector_config;
         echo '<tr><th scope="row"><label for="dcb_chart_routing_connector_config_json">Chart Routing Connector Config (JSON)</label></th><td>';
-        echo '<textarea class="large-text code" rows="5" id="dcb_chart_routing_connector_config_json" name="dcb_chart_routing_connector_config_json" placeholder="{}">' . esc_textarea((string) wp_json_encode($chart_connector_config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) . '</textarea>';
-        echo '<p class="description">Generic connector boundary only. Do not store vendor secrets in code.</p>';
+        echo '<textarea class="large-text code" rows="5" id="dcb_chart_routing_connector_config_json" name="dcb_chart_routing_connector_config_json" placeholder="{}">' . esc_textarea((string) wp_json_encode($chart_connector_display, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) . '</textarea>';
+        echo '<p class="description">Public connector config only. Secrets are stored in a separate secure boundary.</p>';
+        echo '</td></tr>';
+
+        $stored_secret = (string) get_option('dcb_chart_routing_connector_secret', '');
+        $masked_secret = '';
+        if ($stored_secret !== '' && function_exists('dcb_chart_routing_unseal_secret') && function_exists('dcb_chart_routing_mask_secret')) {
+            $masked_secret = dcb_chart_routing_mask_secret(dcb_chart_routing_unseal_secret($stored_secret));
+        }
+        echo '<tr><th scope="row"><label for="dcb_chart_routing_connector_secret">Chart Routing Connector Secret</label></th><td>';
+        echo '<input type="password" class="regular-text" id="dcb_chart_routing_connector_secret" name="dcb_chart_routing_connector_secret" value="" autocomplete="new-password" />';
+        echo '<p class="description">Current stored secret: <strong>' . esc_html($masked_secret !== '' ? $masked_secret : 'none') . '</strong>. Leave blank to keep current value.</p>';
+        echo '<label><input type="checkbox" name="dcb_chart_routing_clear_secret" value="1" /> Clear stored secret</label>';
         echo '</td></tr>';
 
         $checked = $field('dcb_upload_email_attachments') === '1';
@@ -69,6 +84,11 @@ final class DCB_Diagnostics {
         $timeline_checked = $field('dcb_workflow_enable_activity_timeline') === '1';
         echo '<tr><th scope="row">Activity Timeline</th><td>';
         echo '<label><input type="checkbox" name="dcb_workflow_enable_activity_timeline" value="1" ' . checked($timeline_checked, true, false) . ' /> Store workflow activity timeline</label>';
+        echo '</td></tr>';
+
+        $require_confirm = $field('dcb_chart_routing_require_confirmation') === '1';
+        echo '<tr><th scope="row">Chart Routing Guardrail</th><td>';
+        echo '<label><input type="checkbox" name="dcb_chart_routing_require_confirmation" value="1" ' . checked($require_confirm, true, false) . ' /> Require human confirmation before route/attach</label>';
         echo '</td></tr>';
 
         $tutor_enabled = $field('dcb_tutor_integration_enabled') === '1';
@@ -171,7 +191,27 @@ final class DCB_Diagnostics {
         if (!is_array($chart_connector)) {
             $chart_connector = array();
         }
+        if (function_exists('dcb_chart_routing_sanitize_public_connector_config')) {
+            $chart_connector = dcb_chart_routing_sanitize_public_connector_config($chart_connector);
+        }
         update_option('dcb_chart_routing_connector_config', $chart_connector, false);
+
+        $clear_secret = !empty($_POST['dcb_chart_routing_clear_secret']);
+        if ($clear_secret) {
+            update_option('dcb_chart_routing_connector_secret', '', false);
+        } else {
+            $new_secret_raw = isset($_POST['dcb_chart_routing_connector_secret'])
+                ? trim((string) wp_unslash($_POST['dcb_chart_routing_connector_secret']))
+                : '';
+            if ($new_secret_raw !== '') {
+                $sealed = function_exists('dcb_chart_routing_seal_secret') ? dcb_chart_routing_seal_secret($new_secret_raw) : $new_secret_raw;
+                update_option('dcb_chart_routing_connector_secret', $sealed, false);
+            }
+        }
+
+        update_option('dcb_chart_routing_require_confirmation', !empty($_POST['dcb_chart_routing_require_confirmation']) ? '1' : '0', false);
+        $max_retry = isset($_POST['dcb_chart_routing_max_retry_attempts']) ? (int) $_POST['dcb_chart_routing_max_retry_attempts'] : 3;
+        update_option('dcb_chart_routing_max_retry_attempts', max(1, min(10, $max_retry)), false);
 
         if (class_exists('DCB_Integration_Tutor')) {
             DCB_Integration_Tutor::save_settings_from_post($_POST);

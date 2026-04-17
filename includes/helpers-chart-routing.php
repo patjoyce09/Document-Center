@@ -298,3 +298,242 @@ function dcb_chart_routing_audit_payload_shape(array $payload): array {
         'result_message' => sanitize_text_field((string) ($payload['result_message'] ?? '')),
     );
 }
+
+function dcb_chart_routing_mask_secret(string $secret): string {
+    $secret = trim($secret);
+    if ($secret === '') {
+        return '';
+    }
+    $len = strlen($secret);
+    if ($len <= 4) {
+        return str_repeat('*', $len);
+    }
+    return str_repeat('*', $len - 4) . substr($secret, -4);
+}
+
+function dcb_chart_routing_sensitive_config_keys(): array {
+    return array('secret', 'token', 'api_key', 'apikey', 'password', 'client_secret', 'access_key');
+}
+
+function dcb_chart_routing_sanitize_public_connector_config(array $config): array {
+    $safe = array();
+    foreach ($config as $key => $value) {
+        $k = sanitize_key((string) $key);
+        if ($k === '') {
+            continue;
+        }
+
+        $is_sensitive = false;
+        foreach (dcb_chart_routing_sensitive_config_keys() as $needle) {
+            if ($needle !== '' && strpos($k, $needle) !== false) {
+                $is_sensitive = true;
+                break;
+            }
+        }
+        if ($is_sensitive) {
+            continue;
+        }
+
+        if (is_scalar($value)) {
+            $safe[$k] = sanitize_text_field((string) $value);
+        } elseif (is_array($value)) {
+            $safe[$k] = array_map('sanitize_text_field', array_map(static function ($row) {
+                return is_scalar($row) ? (string) $row : '';
+            }, $value));
+        }
+    }
+
+    return $safe;
+}
+
+function dcb_chart_routing_connector_config_for_display(array $config): array {
+    $safe = dcb_chart_routing_sanitize_public_connector_config($config);
+    return function_exists('apply_filters')
+        ? (array) apply_filters('dcb_chart_routing_connector_config_display', $safe, $config)
+        : $safe;
+}
+
+function dcb_chart_routing_secret_key_material(): string {
+    $salt = function_exists('wp_salt') ? (string) wp_salt('auth') : 'dcb-chart-routing-salt';
+    return hash('sha256', $salt . '|dcb_chart_routing_secure_config', true);
+}
+
+function dcb_chart_routing_seal_secret(string $secret): string {
+    $secret = trim($secret);
+    if ($secret === '') {
+        return '';
+    }
+
+    if (function_exists('openssl_encrypt')) {
+        try {
+            $iv = random_bytes(16);
+        } catch (Throwable $e) {
+            $iv = substr(hash('sha256', uniqid('dcb-chart-routing', true), true), 0, 16);
+        }
+
+        $encrypted = openssl_encrypt($secret, 'aes-256-cbc', dcb_chart_routing_secret_key_material(), OPENSSL_RAW_DATA, $iv);
+        if (is_string($encrypted) && $encrypted !== '') {
+            return 'enc:' . base64_encode($iv . '::' . $encrypted);
+        }
+    }
+
+    return 'plain:' . base64_encode($secret);
+}
+
+function dcb_chart_routing_unseal_secret(string $stored): string {
+    $stored = trim($stored);
+    if ($stored === '') {
+        return '';
+    }
+
+    if (strpos($stored, 'enc:') === 0) {
+        $raw = base64_decode(substr($stored, 4), true);
+        if (!is_string($raw) || $raw === '') {
+            return '';
+        }
+        $parts = explode('::', $raw, 2);
+        if (count($parts) !== 2) {
+            return '';
+        }
+        $iv = (string) $parts[0];
+        $cipher = (string) $parts[1];
+        if (!function_exists('openssl_decrypt')) {
+            return '';
+        }
+        $plain = openssl_decrypt($cipher, 'aes-256-cbc', dcb_chart_routing_secret_key_material(), OPENSSL_RAW_DATA, $iv);
+        return is_string($plain) ? $plain : '';
+    }
+
+    if (strpos($stored, 'plain:') === 0) {
+        $plain = base64_decode(substr($stored, 6), true);
+        return is_string($plain) ? $plain : '';
+    }
+
+    return '';
+}
+
+function dcb_chart_routing_resolved_connector_config(): array {
+    $public = get_option('dcb_chart_routing_connector_config', array());
+    if (!is_array($public)) {
+        $public = array();
+    }
+    $public = dcb_chart_routing_sanitize_public_connector_config($public);
+
+    $stored_secret = (string) get_option('dcb_chart_routing_connector_secret', '');
+    $secret = dcb_chart_routing_unseal_secret($stored_secret);
+    if ($secret !== '') {
+        $public['api_token'] = $secret;
+    }
+
+    return $public;
+}
+
+function dcb_chart_routing_requires_confirmation(): bool {
+    return (string) get_option('dcb_chart_routing_require_confirmation', '1') === '1';
+}
+
+function dcb_chart_routing_max_retry_attempts(): int {
+    $max = (int) get_option('dcb_chart_routing_max_retry_attempts', 3);
+    return max(1, min(10, $max));
+}
+
+function dcb_chart_routing_validation_payload_shape(array $payload): array {
+    $errors = isset($payload['errors']) && is_array($payload['errors'])
+        ? array_values(array_filter(array_map('sanitize_text_field', $payload['errors'])))
+        : array();
+    $warnings = isset($payload['warnings']) && is_array($payload['warnings'])
+        ? array_values(array_filter(array_map('sanitize_text_field', $payload['warnings'])))
+        : array();
+
+    return array(
+        'ok' => !empty($payload['ok']) && empty($errors),
+        'errors' => $errors,
+        'warnings' => $warnings,
+        'checked_at' => sanitize_text_field((string) ($payload['checked_at'] ?? current_time('mysql'))),
+        'mode' => sanitize_key((string) ($payload['mode'] ?? 'none_manual')),
+        'provider_key' => sanitize_key((string) ($payload['provider_key'] ?? '')),
+    );
+}
+
+function dcb_chart_routing_route_result_payload_shape(array $payload): array {
+    $state = sanitize_key((string) ($payload['state'] ?? 'attempted'));
+    $allowed = array('attempted', 'confirmed', 'attached', 'failed', 'retry_pending');
+    if (!in_array($state, $allowed, true)) {
+        $state = 'attempted';
+    }
+
+    return array(
+        'state' => $state,
+        'attempted' => !empty($payload['attempted']),
+        'confirmed' => !empty($payload['confirmed']),
+        'attached' => !empty($payload['attached']),
+        'retry_count' => max(0, (int) ($payload['retry_count'] ?? 0)),
+        'retryable' => !empty($payload['retryable']),
+        'failure_reason' => sanitize_key((string) ($payload['failure_reason'] ?? '')),
+        'message' => sanitize_text_field((string) ($payload['message'] ?? '')),
+        'external_reference' => sanitize_text_field((string) ($payload['external_reference'] ?? '')),
+        'attempted_at' => sanitize_text_field((string) ($payload['attempted_at'] ?? '')),
+        'confirmed_at' => sanitize_text_field((string) ($payload['confirmed_at'] ?? '')),
+        'attached_at' => sanitize_text_field((string) ($payload['attached_at'] ?? '')),
+        'failed_at' => sanitize_text_field((string) ($payload['failed_at'] ?? '')),
+        'retry_pending_at' => sanitize_text_field((string) ($payload['retry_pending_at'] ?? '')),
+        'updated_at' => sanitize_text_field((string) ($payload['updated_at'] ?? current_time('mysql'))),
+    );
+}
+
+function dcb_chart_routing_resolve_result_state(bool $ok, string $requested_state, int $retry_count, int $max_retry): string {
+    if ($ok) {
+        return 'attached';
+    }
+
+    $requested_state = sanitize_key($requested_state);
+    if ($requested_state === 'retry_pending') {
+        return 'retry_pending';
+    }
+
+    if ($retry_count < max(1, $max_retry)) {
+        return 'retry_pending';
+    }
+
+    return 'failed';
+}
+
+function dcb_chart_routing_redact_sensitive_text(string $text, ?array $config = null): string {
+    $text = (string) $text;
+    if ($text === '') {
+        return '';
+    }
+
+    if ($config === null) {
+        $config = dcb_chart_routing_resolved_connector_config();
+    }
+
+    $redacted = $text;
+    if (is_array($config)) {
+        foreach ($config as $key => $value) {
+            $k = sanitize_key((string) $key);
+            if ($k === '' || !is_scalar($value)) {
+                continue;
+            }
+            $raw = trim((string) $value);
+            if ($raw === '' || strlen($raw) < 6) {
+                continue;
+            }
+            $is_sensitive = false;
+            foreach (dcb_chart_routing_sensitive_config_keys() as $needle) {
+                if ($needle !== '' && strpos($k, $needle) !== false) {
+                    $is_sensitive = true;
+                    break;
+                }
+            }
+            if ($k === 'api_token') {
+                $is_sensitive = true;
+            }
+            if ($is_sensitive) {
+                $redacted = str_replace($raw, '[REDACTED]', $redacted);
+            }
+        }
+    }
+
+    return sanitize_text_field($redacted);
+}

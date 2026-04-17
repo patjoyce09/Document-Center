@@ -27,6 +27,11 @@ require_once DCB_PLUGIN_DIR . 'includes/class-chart-routing.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-migrations.php';
 require_once DCB_PLUGIN_DIR . 'includes/class-cli.php';
 
+$provider_bootstrap = DCB_PLUGIN_DIR . 'providers/real-connector-skeleton/bootstrap.php';
+if (is_readable($provider_bootstrap)) {
+    require_once $provider_bootstrap;
+}
+
 final class DCB_Loader {
     private static ?DCB_Loader $instance = null;
 

@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class DCB_Migrations {
     private const OPTION_KEY = 'dcb_schema_version';
-    private const TARGET_VERSION = 7;
+    private const TARGET_VERSION = 8;
 
     public static function activate(): void {
         self::run();
@@ -103,6 +103,22 @@ final class DCB_Migrations {
             }
             if (get_option('dcb_chart_routing_connector_config', null) === null) {
                 add_option('dcb_chart_routing_connector_config', array(), '', false);
+            }
+            return;
+        }
+
+        if ($version === 8) {
+            if (get_option('dcb_chart_routing_connector_secret', null) === null) {
+                add_option('dcb_chart_routing_connector_secret', '', '', false);
+            }
+            if (get_option('dcb_chart_routing_require_confirmation', null) === null) {
+                add_option('dcb_chart_routing_require_confirmation', '1', '', false);
+            }
+            if (get_option('dcb_chart_routing_max_retry_attempts', null) === null) {
+                add_option('dcb_chart_routing_max_retry_attempts', 3, '', false);
+            }
+            if (get_option('dcb_chart_routing_last_connector_validation', null) === null) {
+                add_option('dcb_chart_routing_last_connector_validation', array(), '', false);
             }
         }
     }

@@ -293,6 +293,41 @@ Validate API/Bot connector config payload.
 2. `$mode` (`string`)
 3. `$config` (`array`)
 
+### `dcb_chart_routing_connector_config_display`
+Filter public chart-routing connector config before admin display (secrets already stripped).
+
+**Arguments**
+1. `$display_config` (`array`)
+2. `$raw_config` (`array`)
+
+### `dcb_real_connector_skeleton_search_candidates`
+Provide candidate patient rows for the real connector skeleton package.
+
+**Arguments**
+1. `$candidates` (`array`)
+2. `$identifiers` (`array`)
+3. `$context` (`array`)
+4. `$config` (`array`)
+
+### `dcb_real_connector_skeleton_attach`
+Execute or override attach behavior for the real connector skeleton package.
+
+**Arguments**
+1. `$result` (`array`)
+2. `$chart_target` (`array`)
+3. `$artifact` (`array`)
+4. `$context` (`array`)
+5. `$config` (`array`)
+
+### `dcb_real_connector_skeleton_schedule_context`
+Provide optional schedule context rows for the real connector skeleton package.
+
+**Arguments**
+1. `$schedule_rows` (`array`)
+2. `$identifiers` (`array`)
+3. `$context` (`array`)
+4. `$config` (`array`)
+
 ### `dcb_sample_template_pack`
 Filter bundled generic sample templates before load into builder forms.
 

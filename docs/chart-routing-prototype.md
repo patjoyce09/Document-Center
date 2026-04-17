@@ -85,4 +85,10 @@ Included adapters:
 - Report-import placeholder (`report_import`)
 - API/Bot placeholder extension path (`api`, `bot`) via hooks
 
+Next-phase implementation adds an external package skeleton at:
+
+- `providers/real-connector-skeleton/`
+
+See `docs/connector-skeleton-secure-config.md` for secure config + retry-state details.
+
 No vendor credentials or hardcoded EMR endpoints/selectors are embedded in core classes.

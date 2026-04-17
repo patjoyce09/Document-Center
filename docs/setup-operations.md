@@ -47,6 +47,10 @@ The snapshot includes direct links to Setup & Operations, OCR diagnostics/review
 - Modes are controlled with `dcb_chart_routing_mode` (`none_manual`, `api`, `bot`, `report_import`).
 - Weak evidence (especially name-only) must stay in manual review and must not auto-route.
 - Use hooks/adapters for external EMR integration; do not hardcode vendor URLs, selectors, or credentials in core plugin code.
+- Connector package skeleton is loaded from `providers/real-connector-skeleton/` and injected through adapter hooks only.
+- Keep connector secret/token in the secure secret boundary (masked in UI; not echoed raw).
+- Use **Test Connector Readiness** in Chart Routing Queue to validate config safely.
+- Route/attach observability now tracks result state, retry count, failure reason, and timestamps.
 
 ## Forms Import / Export
 
