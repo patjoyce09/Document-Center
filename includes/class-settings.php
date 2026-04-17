@@ -35,6 +35,9 @@ final class DCB_Settings {
             'dcb_forms_custom' => array(),
             'dcb_workflow_default_status' => 'submitted',
             'dcb_workflow_enable_activity_timeline' => '1',
+            'dcb_workflow_routing_rules' => array(),
+            'dcb_workflow_queue_groups' => array(),
+            'dcb_workflow_packet_definitions' => array(),
             'dcb_ocr_mode' => 'auto',
             'dcb_ocr_api_base_url' => '',
             'dcb_ocr_api_key' => '',
@@ -59,6 +62,9 @@ final class DCB_Settings {
         register_setting('dcb_settings_group', 'dcb_brand_label');
         register_setting('dcb_settings_group', 'dcb_workflow_default_status');
         register_setting('dcb_settings_group', 'dcb_workflow_enable_activity_timeline');
+        register_setting('dcb_settings_group', 'dcb_workflow_routing_rules');
+        register_setting('dcb_settings_group', 'dcb_workflow_queue_groups');
+        register_setting('dcb_settings_group', 'dcb_workflow_packet_definitions');
         register_setting('dcb_settings_group', 'dcb_ocr_mode');
         register_setting('dcb_settings_group', 'dcb_ocr_api_base_url');
         register_setting('dcb_settings_group', 'dcb_ocr_api_key');

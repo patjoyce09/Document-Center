@@ -24,6 +24,7 @@ jobs:
           php tests/capabilities_access_smoke.php
           php tests/builder_maturity_smoke.php
           php tests/builder_validation_endpoint_smoke.php
+          php tests/workflow_routing_smoke.php
 
   js-sanity:
     runs-on: ubuntu-latest

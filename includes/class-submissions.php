@@ -284,7 +284,14 @@ final class DCB_Submissions {
 
         dcb_finalize_submission_output((int) $submission_id, $user_id);
         if (class_exists('DCB_Workflow')) {
-            DCB_Workflow::set_status((int) $submission_id, 'in_review', 'Submission finalized and routed for review.');
+            $route = DCB_Workflow::route_submission((int) $submission_id, array(
+                'source' => 'submit_ajax',
+                'status' => 'submitted',
+                'form_key' => $form_key,
+            ));
+            if (empty($route['matched'])) {
+                DCB_Workflow::set_status((int) $submission_id, 'in_review', 'Submission finalized and routed for review.');
+            }
         }
         dcb_send_submission_notification((int) $submission_id);
         do_action('dcb_submission_completed', (int) $submission_id, $form_key, $user_id);

@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.6
+Stable tag: 0.2.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,17 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.7 =
+* Added generic data-driven workflow routing rules with matching on form key, template id, status, field conditions, document type, and packet key.
+* Added assignment target model supporting user, role, and queue assignments with backward-compatible `_dcb_workflow_assignee_user_id` behavior.
+* Strengthened workflow status transition handling with explicit server-side validation and transition event mapping.
+* Added structured review notes and correction request flow with actor/time attribution and timeline events.
+* Added packet/bundle tracking model with required/received/approved/missing item state and completeness checks.
+* Added role/capability-gated workflow queue views (my assigned, awaiting review, needs correction, finalized) plus configurable queue groups.
+* Added workflow routing configuration admin page for routing rules, queue groups, and packet definitions.
+* Added extensible workflow notification trigger hooks for status/assignment/routing/note events.
+* Added focused workflow routing smoke test coverage to CI.
+
 = 0.2.6 =
 * Builder maturity pass: replaced JSON-first schema editing with structured editors for sections, steps/pages, repeaters, hard stops, template blocks, and document nodes.
 * Added field-level condition builder with operator selection, target-field references, and inline validation feedback.

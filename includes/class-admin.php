@@ -38,6 +38,8 @@ final class DCB_Admin {
         echo '<ul>';
         echo '<li><a class="button" href="' . esc_url(admin_url('admin.php?page=dcb-builder')) . '">Open Builder</a></li>';
         echo '<li><a class="button" href="' . esc_url(admin_url('edit.php?post_type=dcb_form_submission')) . '">View Submissions</a></li>';
+        echo '<li><a class="button" href="' . esc_url(admin_url('admin.php?page=dcb-workflow-queues')) . '">Workflow Queues</a></li>';
+        echo '<li><a class="button" href="' . esc_url(admin_url('admin.php?page=dcb-workflow-config')) . '">Workflow Routing</a></li>';
         echo '<li><a class="button" href="' . esc_url(admin_url('admin.php?page=dcb-ocr-diagnostics')) . '">OCR Diagnostics</a></li>';
         echo '</ul>';
         echo '</div>';
