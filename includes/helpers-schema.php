@@ -1246,6 +1246,120 @@ function dcb_apply_ocr_candidate_review(array $draft_form, array $review_rows): 
     return $draft_form;
 }
 
+function dcb_builder_preview_payload(array $form): array {
+    $fields = isset($form['fields']) && is_array($form['fields']) ? $form['fields'] : array();
+    $sections = isset($form['sections']) && is_array($form['sections']) ? $form['sections'] : array();
+    $steps = isset($form['steps']) && is_array($form['steps']) ? $form['steps'] : array();
+    $template_blocks = isset($form['template_blocks']) && is_array($form['template_blocks']) ? $form['template_blocks'] : array();
+    $document_nodes = isset($form['document_nodes']) && is_array($form['document_nodes']) ? $form['document_nodes'] : array();
+
+    $field_map = array();
+    foreach ($fields as $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $key = sanitize_key((string) ($field['key'] ?? ''));
+        if ($key === '') {
+            continue;
+        }
+        $field_map[$key] = array(
+            'key' => $key,
+            'label' => sanitize_text_field((string) ($field['label'] ?? $key)),
+            'type' => sanitize_key((string) ($field['type'] ?? 'text')),
+            'required' => !empty($field['required']),
+        );
+    }
+
+    $block_map = array();
+    foreach ($template_blocks as $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $block_id = sanitize_key((string) ($block['block_id'] ?? ''));
+        if ($block_id === '') {
+            continue;
+        }
+        $block_map[$block_id] = array(
+            'block_id' => $block_id,
+            'type' => sanitize_key((string) ($block['type'] ?? 'paragraph')),
+            'text' => sanitize_text_field((string) ($block['text'] ?? '')),
+        );
+    }
+
+    $step_rows = array();
+    foreach ($steps as $step) {
+        if (!is_array($step)) {
+            continue;
+        }
+        $step_key = sanitize_key((string) ($step['key'] ?? ''));
+        $step_label = sanitize_text_field((string) ($step['label'] ?? $step_key));
+        if ($step_key === '' && $step_label === '') {
+            continue;
+        }
+        $section_keys = array_values(array_filter(array_map('sanitize_key', (array) ($step['section_keys'] ?? array()))));
+        $section_rows = array();
+        foreach ($sections as $section) {
+            if (!is_array($section)) {
+                continue;
+            }
+            $section_key = sanitize_key((string) ($section['key'] ?? ''));
+            if (!empty($section_keys) && !in_array($section_key, $section_keys, true)) {
+                continue;
+            }
+            $field_rows = array();
+            foreach ((array) ($section['field_keys'] ?? array()) as $field_key) {
+                $field_key = sanitize_key((string) $field_key);
+                if ($field_key === '' || !isset($field_map[$field_key])) {
+                    continue;
+                }
+                $field_rows[] = $field_map[$field_key];
+            }
+            $section_rows[] = array(
+                'key' => $section_key,
+                'label' => sanitize_text_field((string) ($section['label'] ?? $section_key)),
+                'fields' => $field_rows,
+            );
+        }
+        $step_rows[] = array(
+            'key' => $step_key,
+            'label' => $step_label,
+            'sections' => $section_rows,
+        );
+    }
+
+    $output_nodes = array();
+    foreach ($document_nodes as $node) {
+        if (!is_array($node)) {
+            continue;
+        }
+        $type = sanitize_key((string) ($node['type'] ?? ''));
+        if ($type === 'field') {
+            $field_key = sanitize_key((string) ($node['field_key'] ?? ''));
+            $output_nodes[] = array(
+                'type' => 'field',
+                'field_key' => $field_key,
+                'field' => $field_key !== '' && isset($field_map[$field_key]) ? $field_map[$field_key] : null,
+            );
+            continue;
+        }
+        if ($type === 'block') {
+            $block_id = sanitize_key((string) ($node['block_id'] ?? ''));
+            $output_nodes[] = array(
+                'type' => 'block',
+                'block_id' => $block_id,
+                'block' => $block_id !== '' && isset($block_map[$block_id]) ? $block_map[$block_id] : null,
+            );
+        }
+    }
+
+    return array(
+        'steps' => $step_rows,
+        'document_output' => $output_nodes,
+        'template_blocks' => array_values($block_map),
+        'field_order' => array_values($field_map),
+    );
+}
+
 function dcb_validate_value(array $field, $value): array {
     $key = (string) ($field['key'] ?? 'field');
     $label = (string) ($field['label'] ?? $key);

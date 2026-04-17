@@ -8,6 +8,7 @@ final class DCB_Builder {
     public static function init(): void {
         add_action('admin_post_dcb_save_builder', array(__CLASS__, 'save_builder'));
         add_action('wp_ajax_dcb_builder_ocr_seed_extract', array(__CLASS__, 'ocr_seed_extract_ajax'));
+        add_action('wp_ajax_dcb_builder_validate_schema', array(__CLASS__, 'validate_schema_ajax'));
     }
 
     public static function render_page(): void {
@@ -158,6 +159,45 @@ final class DCB_Builder {
             }
             wp_send_json_error(array('message' => 'OCR extraction failed.'), 500);
         }
+    }
+
+    public static function validate_schema_ajax(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_FORMS)) {
+            wp_send_json_error(array('message' => 'Unauthorized'), 403);
+        }
+
+        check_ajax_referer('dcb_builder_validate_schema', 'nonce');
+
+        $raw_form = isset($_POST['form']) ? wp_unslash((string) $_POST['form']) : '';
+        $form = array();
+
+        if ($raw_form !== '') {
+            $decoded = json_decode($raw_form, true);
+            if (!is_array($decoded)) {
+                wp_send_json_error(array('message' => 'Invalid form payload.'), 422);
+            }
+            $form = $decoded;
+        } else {
+            $raw_forms_json = isset($_POST['digital_forms_json']) ? wp_unslash((string) $_POST['digital_forms_json']) : '';
+            $form_key = sanitize_key((string) ($_POST['form_key'] ?? ''));
+            if ($raw_forms_json === '' || $form_key === '') {
+                wp_send_json_error(array('message' => 'Missing form data.'), 422);
+            }
+            $decoded_forms = json_decode($raw_forms_json, true);
+            if (!is_array($decoded_forms) || !isset($decoded_forms[$form_key]) || !is_array($decoded_forms[$form_key])) {
+                wp_send_json_error(array('message' => 'Form not found in payload.'), 422);
+            }
+            $form = $decoded_forms[$form_key];
+        }
+
+        $validation = dcb_builder_validate_form_schema($form);
+        $preview = dcb_builder_preview_payload($form);
+
+        wp_send_json_success(array(
+            'errors' => array_values((array) ($validation['errors'] ?? array())),
+            'warnings' => array_values((array) ($validation['warnings'] ?? array())),
+            'preview' => $preview,
+        ));
     }
 
     public static function save_builder(): void {

@@ -27,6 +27,8 @@ final class DCB_Assets {
         wp_enqueue_script('dcb-builder-admin', DCB_PLUGIN_URL . $js_rel, array('jquery'), file_exists(DCB_PLUGIN_DIR . $js_rel) ? (string) filemtime(DCB_PLUGIN_DIR . $js_rel) : DCB_VERSION, true);
         wp_localize_script('dcb-builder-admin', 'DCB_DF_BUILDER_ADMIN', array(
             'ajaxUrl' => admin_url('admin-ajax.php'),
+            'validationAction' => 'dcb_builder_validate_schema',
+            'validationNonce' => wp_create_nonce('dcb_builder_validate_schema'),
             'fieldTypes' => dcb_allowed_field_types(),
             'templateBlockTypes' => dcb_allowed_template_block_types(),
             'conditionOperators' => array(

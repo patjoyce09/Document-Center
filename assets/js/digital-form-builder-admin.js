@@ -174,6 +174,74 @@
     return chunks.join('');
   }
 
+  function previewHtmlFromPayload(payload, fallbackForm) {
+    if (!payload || typeof payload !== 'object') {
+      return previewHtml(fallbackForm || {});
+    }
+
+    var steps = asArray(payload.steps);
+    var documentOutput = asArray(payload.document_output);
+    var templateBlocks = asArray(payload.template_blocks);
+    var fieldOrder = asArray(payload.field_order);
+
+    var chunks = ['<div class="dcb-preview-surface">'];
+    chunks.push('<h4>Steps & Sections</h4>');
+    if (!steps.length) {
+      chunks.push('<p class="description">No steps defined.</p>');
+    } else {
+      steps.forEach(function (step, idx) {
+        chunks.push('<div class="dcb-preview-step"><strong>' + escapeHtml(step.label || ('Step ' + (idx + 1))) + '</strong>');
+        asArray(step.sections).forEach(function (section) {
+          chunks.push('<div class="dcb-preview-section"><em>' + escapeHtml(section.label || section.key || 'Section') + '</em><ol>');
+          asArray(section.fields).forEach(function (field) {
+            chunks.push('<li>' + escapeHtml(field.label || field.key || '') + ' <small>(' + escapeHtml(field.type || 'text') + ')</small></li>');
+          });
+          chunks.push('</ol></div>');
+        });
+        chunks.push('</div>');
+      });
+    }
+
+    chunks.push('<h4>Document Output Order</h4><ol>');
+    if (!documentOutput.length) {
+      chunks.push('<li><em>No document nodes configured.</em></li>');
+    } else {
+      documentOutput.forEach(function (node) {
+        if (node.type === 'field') {
+          chunks.push('<li>Field: ' + escapeHtml((node.field && node.field.key) || node.field_key || '') + '</li>');
+        } else if (node.type === 'block') {
+          chunks.push('<li>Block: ' + escapeHtml((node.block && node.block.block_id) || node.block_id || '') + ' <small>(' + escapeHtml((node.block && node.block.type) || 'block') + ')</small></li>');
+        }
+      });
+    }
+    chunks.push('</ol>');
+
+    chunks.push('<h4>Template Blocks</h4>');
+    if (!templateBlocks.length) {
+      chunks.push('<p class="description">No template blocks.</p>');
+    } else {
+      chunks.push('<ul>');
+      templateBlocks.forEach(function (block) {
+        chunks.push('<li>' + escapeHtml(block.block_id || '') + ' <small>(' + escapeHtml(block.type || 'paragraph') + ')</small> ' + escapeHtml(block.text || '') + '</li>');
+      });
+      chunks.push('</ul>');
+    }
+
+    chunks.push('<h4>Field Order</h4>');
+    if (!fieldOrder.length) {
+      chunks.push('<p class="description">No fields.</p>');
+    } else {
+      chunks.push('<ol>');
+      fieldOrder.forEach(function (field) {
+        chunks.push('<li>' + escapeHtml(field.label || field.key || '') + ' <small>(' + escapeHtml(field.type || 'text') + ')</small></li>');
+      });
+      chunks.push('</ol>');
+    }
+
+    chunks.push('</div>');
+    return chunks.join('');
+  }
+
   function validateForm(form) {
     var errors = [];
     var warnings = [];
@@ -292,10 +360,31 @@
     }
 
     var form = ensureFormShape(state.forms[selected]);
-    var issues = validateForm(form);
+    var localIssues = validateForm(form);
+    var remoteValidation = state.serverValidation[selected] || null;
+    var issues = {
+      errors: [],
+      warnings: []
+    };
+    if (remoteValidation && remoteValidation.ok) {
+      issues.errors = asArray(remoteValidation.errors);
+      issues.warnings = asArray(remoteValidation.warnings);
+    } else {
+      issues.errors = localIssues.errors;
+      issues.warnings = localIssues.warnings;
+    }
     html.push('<div class="dcb-form-header"><label>Form Key<input type="text" data-act="set-key" value="' + escapeHtml(selected) + '"/></label><label>Label<input type="text" data-act="set-label" value="' + escapeHtml(form.label || '') + '"/></label><label>Recipients<input type="text" data-act="set-recipients" value="' + escapeHtml(form.recipients || '') + '"/></label><button type="button" class="button" data-act="duplicate-form">Duplicate</button><button type="button" class="button button-link-delete" data-act="delete-form">Delete</button></div>');
 
     html.push('<section class="dcb-panel"><h3>Validation</h3>');
+    if (remoteValidation && remoteValidation.loading) {
+      html.push('<p class="description">Validating with server rules…</p>');
+    }
+    if (remoteValidation && !remoteValidation.ok && remoteValidation.message) {
+      html.push('<div class="notice notice-warning inline"><p>' + escapeHtml(remoteValidation.message) + '</p></div>');
+      if (localIssues.errors.length || localIssues.warnings.length) {
+        html.push('<p class="description">Showing local validation fallback.</p>');
+      }
+    }
     if (!issues.errors.length && !issues.warnings.length) {
       html.push('<p class="description">No validation issues detected.</p>');
     } else {
@@ -352,9 +441,54 @@
     });
     html.push('</tbody></table><p><button type="button" class="button" data-act="dn-add-field">Add Field Node</button> <button type="button" class="button" data-act="dn-add-block">Add Block Node</button></p></section>');
 
-    html.push('<section class="dcb-panel"><h3>Preview</h3>' + previewHtml(form) + '</section>');
+    var previewPayload = state.serverPreview[selected] || null;
+    html.push('<section class="dcb-panel"><h3>Preview</h3>' + previewHtmlFromPayload(previewPayload, form) + '</section>');
     html.push('</main></div>');
     $root.html(html.join(''));
+  }
+
+  function scheduleServerValidation(state) {
+    var key = state.selectedKey;
+    if (!key || !state.forms[key] || !cfg.ajaxUrl || !cfg.validationAction || !cfg.validationNonce) {
+      return;
+    }
+
+    var form = ensureFormShape(state.forms[key]);
+    var fingerprint = JSON.stringify(form || {});
+    if (state.serverValidationFingerprint[key] && state.serverValidationFingerprint[key] === fingerprint) {
+      return;
+    }
+
+    if (state.validationTimer) {
+      clearTimeout(state.validationTimer);
+    }
+
+    state.serverValidation[key] = { loading: true, ok: false, errors: [], warnings: [] };
+
+    state.validationTimer = setTimeout(function () {
+      $.post(cfg.ajaxUrl, {
+        action: cfg.validationAction,
+        nonce: cfg.validationNonce,
+        form: JSON.stringify(form)
+      }).done(function (res) {
+        if (!res || !res.success || !res.data) {
+          state.serverValidation[key] = { loading: false, ok: false, errors: [], warnings: [], message: 'Server validation returned an invalid response.' };
+          return;
+        }
+        state.serverValidation[key] = {
+          loading: false,
+          ok: true,
+          errors: asArray(res.data.errors),
+          warnings: asArray(res.data.warnings)
+        };
+        state.serverPreview[key] = res.data.preview || null;
+        state.serverValidationFingerprint[key] = fingerprint;
+      }).fail(function () {
+        state.serverValidation[key] = { loading: false, ok: false, errors: [], warnings: [], message: 'Server validation unavailable. Using local checks.' };
+      }).always(function () {
+        renderBuilder($('#th-df-builder-root'), state);
+      });
+    }, 250);
   }
 
   function resolveContext(state) {
@@ -439,7 +573,11 @@
       forms: parsedForms || {},
       selectedKey: '',
       ocrDraftPayload: null,
-      ocrReviewRows: []
+      ocrReviewRows: [],
+      serverValidation: {},
+      serverPreview: {},
+      serverValidationFingerprint: {},
+      validationTimer: null
     };
 
     if (!state.forms) {
@@ -451,6 +589,7 @@
       renderBuilder($builderRoot, state);
       renderOcrWorkbench($ocrRoot, state);
       persist(state, $hidden, $advanced);
+      scheduleServerValidation(state);
     }
 
     rerender();

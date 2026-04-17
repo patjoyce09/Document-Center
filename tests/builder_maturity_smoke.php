@@ -125,4 +125,10 @@ $mixed = dcb_normalize_single_form(array(
 ));
 dcb_test_assert(!empty($mixed['sections']) && !empty($mixed['steps']) && !empty($mixed['repeaters']) && !empty($mixed['document_nodes']), 'mixed builder schema should normalize and preserve structural arrays');
 
+$preview = dcb_builder_preview_payload((array) $mixed);
+dcb_test_assert(!empty($preview['steps']) && is_array($preview['steps']), 'preview payload should include steps grouping');
+dcb_test_assert(!empty($preview['document_output']) && is_array($preview['document_output']), 'preview payload should include document output ordering');
+dcb_test_assert(!empty($preview['template_blocks']) && is_array($preview['template_blocks']), 'preview payload should include template block placement data');
+dcb_test_assert(!empty($preview['field_order']) && is_array($preview['field_order']), 'preview payload should include field order data');
+
 echo "builder_maturity_smoke:ok\n";
