@@ -245,6 +245,8 @@ assert_throws(static function () { DCB_Builder::render_page(); }, 'unauthorized 
 assert_throws(static function () { DCB_Builder::ocr_seed_extract_ajax(); }, 'unauthorized user cannot run builder OCR extraction');
 assert_throws(static function () { DCB_Diagnostics::render_settings_page(); }, 'unauthorized user cannot open settings page');
 assert_throws(static function () { DCB_OCR::render_diagnostics_page(); }, 'unauthorized user cannot open ocr diagnostics page');
+$_GET = array('review_id' => 1, 'task' => 'approve');
+assert_throws(static function () { DCB_OCR::handle_review_action(); }, 'unauthorized user cannot execute OCR review action');
 assert_throws(static function () { DCB_Workflow::handle_transition(); }, 'unauthorized user cannot run workflow transition action');
 
 $GLOBALS['mock_current_user_caps'] = array(DCB_Permissions::CAP_MANAGE_FORMS => true);

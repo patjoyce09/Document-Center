@@ -798,7 +798,7 @@ function dcb_upload_extract_text_from_file_local(string $file_path, string $mime
         $warnings[] = array('code' => sanitize_key((string) ($runtime_warning['code'] ?? 'ocr_warning')), 'message' => sanitize_text_field((string) ($runtime_warning['message'] ?? 'OCR warning.')));
     }
 
-    return array(
+    $result = array(
         'text' => $text,
         'normalized' => $normalized,
         'engine' => $engine,
@@ -806,21 +806,389 @@ function dcb_upload_extract_text_from_file_local(string $file_path, string $mime
         'warnings' => $warnings,
         'stages' => array('file_type_inspection', 'text_extraction', 'page_rasterization', 'ocr_fallback'),
     );
+
+    if ($text === '') {
+        $result['failure_reason'] = dcb_ocr_normalize_failure_reason(!empty($inspection['is_image']) && dcb_ocr_get_tesseract_path() === '' ? 'local_binary_missing' : 'empty_extraction');
+    }
+
+    return dcb_ocr_normalize_result_shape($result, 'local');
+}
+
+function dcb_ocr_failure_taxonomy(): array {
+    return array(
+        'empty_extraction' => array('label' => 'Empty extraction', 'recommendation' => 'Review file quality and rerun OCR.', 'severity' => 'warning'),
+        'low_confidence' => array('label' => 'Low confidence', 'recommendation' => 'Review extracted fields and correct manually.', 'severity' => 'warning'),
+        'remote_config_invalid' => array('label' => 'Remote config invalid', 'recommendation' => 'Set HTTPS base URL in OCR settings.', 'severity' => 'error'),
+        'remote_api_key_missing' => array('label' => 'Remote API key missing', 'recommendation' => 'Set OCR API key in settings.', 'severity' => 'error'),
+        'remote_request_failed' => array('label' => 'Remote request failed', 'recommendation' => 'Check network/provider availability and retry.', 'severity' => 'error'),
+        'remote_http_error' => array('label' => 'Remote HTTP error', 'recommendation' => 'Check provider endpoint and response status.', 'severity' => 'error'),
+        'max_file_size_exceeded' => array('label' => 'Max file size exceeded', 'recommendation' => 'Reduce file size or increase configured limit.', 'severity' => 'warning'),
+        'unsupported_mime' => array('label' => 'Unsupported MIME', 'recommendation' => 'Upload supported file type.', 'severity' => 'warning'),
+        'local_binary_missing' => array('label' => 'Local OCR binary missing', 'recommendation' => 'Install/configure local OCR binaries.', 'severity' => 'error'),
+        'rasterization_failed' => array('label' => 'Rasterization failed', 'recommendation' => 'Check pdftoppm/ImageMagick availability and file integrity.', 'severity' => 'error'),
+        'extraction_timeout' => array('label' => 'Extraction timeout', 'recommendation' => 'Increase timeout or process smaller files.', 'severity' => 'warning'),
+        'parse_failed' => array('label' => 'Parse failed', 'recommendation' => 'Check provider response format and retry.', 'severity' => 'error'),
+        'unknown' => array('label' => 'Unknown OCR issue', 'recommendation' => 'Inspect diagnostics and rerun OCR.', 'severity' => 'warning'),
+    );
+}
+
+function dcb_ocr_normalize_failure_reason(string $reason): string {
+    $reason = sanitize_key($reason);
+    if ($reason === '') {
+        return '';
+    }
+
+    $aliases = array(
+        'tesseract_missing' => 'local_binary_missing',
+        'pdftotext_missing' => 'local_binary_missing',
+        'pdftoppm_missing' => 'local_binary_missing',
+        'shell_exec_disabled' => 'local_binary_missing',
+        'http_error' => 'remote_http_error',
+        'request_failed' => 'remote_request_failed',
+        'timeout' => 'extraction_timeout',
+        'json_parse_failed' => 'parse_failed',
+    );
+    if (isset($aliases[$reason])) {
+        $reason = $aliases[$reason];
+    }
+
+    $taxonomy = dcb_ocr_failure_taxonomy();
+    if (!isset($taxonomy[$reason])) {
+        return 'unknown';
+    }
+
+    return $reason;
+}
+
+function dcb_ocr_failure_meta(string $reason): array {
+    $reason = dcb_ocr_normalize_failure_reason($reason);
+    $taxonomy = dcb_ocr_failure_taxonomy();
+    $fallback = $taxonomy['unknown'] ?? array('label' => 'Unknown OCR issue', 'recommendation' => 'Inspect diagnostics.', 'severity' => 'warning');
+    $row = $reason !== '' && isset($taxonomy[$reason]) ? $taxonomy[$reason] : $fallback;
+    $row['code'] = $reason !== '' ? $reason : 'unknown';
+    return $row;
+}
+
+function dcb_ocr_normalize_result_shape(array $result, string $provider = ''): array {
+    $text = sanitize_textarea_field((string) ($result['text'] ?? ''));
+    $engine = sanitize_text_field((string) ($result['engine'] ?? ($provider !== '' ? $provider : 'none')));
+    $provider = sanitize_key((string) ($result['provider'] ?? $provider));
+    if ($provider === '') {
+        $provider = 'local';
+    }
+
+    $warnings_in = isset($result['warnings']) && is_array($result['warnings']) ? $result['warnings'] : array();
+    $warnings = array();
+    foreach ($warnings_in as $warning) {
+        if (is_array($warning)) {
+            $warnings[] = array(
+                'code' => sanitize_key((string) ($warning['code'] ?? 'ocr_warning')),
+                'message' => sanitize_text_field((string) ($warning['message'] ?? 'OCR warning')),
+            );
+        } else {
+            $warnings[] = array('code' => 'ocr_warning', 'message' => sanitize_text_field((string) $warning));
+        }
+    }
+
+    $pages_in = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
+    $pages = array();
+    $total_proxy = 0.0;
+    $count_proxy = 0;
+    foreach ($pages_in as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $page_text = sanitize_textarea_field((string) ($page['text'] ?? ''));
+        $proxy = isset($page['confidence_proxy']) && is_numeric($page['confidence_proxy']) ? (float) $page['confidence_proxy'] : dcb_text_confidence_proxy($page_text);
+        $proxy = round(max(0, min(1, $proxy)), 4);
+        $pages[] = array(
+            'page_number' => max(1, (int) ($page['page_number'] ?? (count($pages) + 1))),
+            'engine' => sanitize_text_field((string) ($page['engine'] ?? $engine)),
+            'text' => $page_text,
+            'text_length' => max(0, (int) ($page['text_length'] ?? strlen($page_text))),
+            'confidence_proxy' => $proxy,
+        );
+        $total_proxy += $proxy;
+        $count_proxy++;
+    }
+
+    $confidence_proxy = isset($result['confidence_proxy']) && is_numeric($result['confidence_proxy'])
+        ? round(max(0, min(1, (float) $result['confidence_proxy'])), 4)
+        : ($count_proxy > 0 ? round($total_proxy / $count_proxy, 4) : round(dcb_text_confidence_proxy($text), 4));
+
+    $failure_reason = dcb_ocr_normalize_failure_reason((string) ($result['failure_reason'] ?? ''));
+    if ($failure_reason === '' && $text === '') {
+        $failure_reason = 'empty_extraction';
+    }
+
+    $normalized = array(
+        'text' => $text,
+        'normalized' => dcb_upload_normalize_text($text),
+        'engine' => $engine,
+        'pages' => $pages,
+        'warnings' => $warnings,
+        'failure_reason' => $failure_reason,
+        'provider' => $provider,
+        'mode' => sanitize_key((string) ($result['mode'] ?? ($provider === 'remote' ? 'remote' : 'local'))),
+        'confidence_proxy' => $confidence_proxy,
+        'confidence_bucket' => dcb_confidence_bucket($confidence_proxy),
+        'provenance' => isset($result['provenance']) && is_array($result['provenance']) ? $result['provenance'] : array(),
+    );
+
+    if (isset($result['stages']) && is_array($result['stages'])) {
+        $normalized['stages'] = array_values(array_filter(array_map('sanitize_key', $result['stages'])));
+    }
+
+    return $normalized;
+}
+
+function dcb_ocr_review_statuses(): array {
+    return array(
+        'pending_review' => 'Pending Review',
+        'corrected' => 'Corrected',
+        'approved' => 'Approved',
+        'rejected' => 'Rejected',
+        'reprocessed' => 'Reprocessed',
+    );
+}
+
+function dcb_ocr_review_append_revision(int $review_id, string $event, array $payload = array()): void {
+    $rows = get_post_meta($review_id, '_dcb_ocr_review_revisions', true);
+    if (!is_array($rows)) {
+        $rows = array();
+    }
+
+    $user = wp_get_current_user();
+    $rows[] = array(
+        'time' => current_time('mysql'),
+        'event' => sanitize_key($event),
+        'actor_user_id' => $user instanceof WP_User ? (int) $user->ID : 0,
+        'actor_name' => $user instanceof WP_User ? (string) $user->display_name : '',
+        'payload' => $payload,
+    );
+    if (count($rows) > 200) {
+        $rows = array_slice($rows, -200);
+    }
+
+    update_post_meta($review_id, '_dcb_ocr_review_revisions', $rows);
+}
+
+function dcb_ocr_review_update_status(int $review_id, string $status, string $note = ''): bool {
+    $status = sanitize_key($status);
+    $allowed = dcb_ocr_review_statuses();
+    if (!isset($allowed[$status])) {
+        return false;
+    }
+
+    $prev = sanitize_key((string) get_post_meta($review_id, '_dcb_ocr_review_status', true));
+    if ($prev === '') {
+        $prev = 'pending_review';
+    }
+
+    update_post_meta($review_id, '_dcb_ocr_review_status', $status);
+    update_post_meta($review_id, '_dcb_ocr_review_status_updated_at', current_time('mysql'));
+    dcb_ocr_review_append_revision($review_id, 'status_changed', array(
+        'from' => $prev,
+        'to' => $status,
+        'note' => sanitize_textarea_field($note),
+    ));
+
+    if (function_exists('do_action')) {
+        do_action('dcb_ocr_review_status_changed', $review_id, $prev, $status, $note);
+    }
+
+    return true;
+}
+
+function dcb_ocr_review_apply_manual_corrections(int $review_id, array $corrections): void {
+    $corrections_json = wp_json_encode($corrections);
+    if (!is_string($corrections_json)) {
+        $corrections_json = '{}';
+    }
+
+    update_post_meta($review_id, '_dcb_ocr_review_corrections', $corrections_json);
+
+    $summary = sanitize_textarea_field((string) ($corrections['text_summary'] ?? ''));
+    if ($summary !== '') {
+        update_post_meta($review_id, '_dcb_ocr_review_corrected_text_summary', $summary);
+    }
+
+    if (isset($corrections['candidate_fields']) && is_array($corrections['candidate_fields'])) {
+        update_post_meta($review_id, '_dcb_ocr_review_corrected_candidates', wp_json_encode($corrections['candidate_fields']));
+    }
+
+    dcb_ocr_review_append_revision($review_id, 'manual_correction_saved', array(
+        'candidate_field_count' => isset($corrections['candidate_fields']) && is_array($corrections['candidate_fields']) ? count($corrections['candidate_fields']) : 0,
+        'summary_length' => strlen($summary),
+    ));
+
+    dcb_ocr_review_update_status($review_id, 'corrected', 'Manual OCR correction saved.');
+
+    if (function_exists('do_action')) {
+        do_action('dcb_ocr_review_corrected', $review_id, $corrections);
+    }
+}
+
+function dcb_ocr_review_promote_builder_draft(int $review_id): array {
+    $label = sanitize_text_field((string) get_the_title($review_id));
+    if ($label === '') {
+        $label = 'OCR Review Draft';
+    }
+
+    $corrections_raw = (string) get_post_meta($review_id, '_dcb_ocr_review_corrections', true);
+    $corrections = json_decode($corrections_raw, true);
+    if (!is_array($corrections)) {
+        $corrections = array();
+    }
+
+    $extraction_raw = (string) get_post_meta($review_id, '_dcb_ocr_review_extraction', true);
+    $extraction = json_decode($extraction_raw, true);
+    if (!is_array($extraction)) {
+        $extraction = array();
+    }
+
+    $text = sanitize_textarea_field((string) ($corrections['text_summary'] ?? ''));
+    if ($text === '') {
+        $text = sanitize_textarea_field((string) ($extraction['text'] ?? ''));
+    }
+
+    $draft = dcb_ocr_to_draft_form($text, $label, $extraction);
+    if (isset($corrections['candidate_fields']) && is_array($corrections['candidate_fields'])) {
+        $review_rows = array();
+        foreach ($corrections['candidate_fields'] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $row['decision'] = sanitize_key((string) ($row['decision'] ?? 'accept'));
+            $review_rows[] = $row;
+        }
+        if (function_exists('dcb_apply_ocr_candidate_review')) {
+            $draft = dcb_apply_ocr_candidate_review($draft, $review_rows);
+        }
+    }
+
+    update_post_meta($review_id, '_dcb_ocr_review_promoted_draft', wp_json_encode($draft));
+    dcb_ocr_review_append_revision($review_id, 'promoted_to_builder_draft', array(
+        'field_count' => isset($draft['fields']) && is_array($draft['fields']) ? count($draft['fields']) : 0,
+    ));
+
+    if (function_exists('do_action')) {
+        do_action('dcb_ocr_review_promoted_draft', $review_id, $draft);
+    }
+
+    return $draft;
+}
+
+function dcb_ocr_review_reprocess(int $review_id, string $mode = ''): array {
+    $file_path = sanitize_text_field((string) get_post_meta($review_id, '_dcb_ocr_review_source_file_path', true));
+    $mime = sanitize_text_field((string) get_post_meta($review_id, '_dcb_ocr_review_mime', true));
+    if ($file_path === '' || !file_exists($file_path) || !is_readable($file_path)) {
+        return array('ok' => false, 'message' => 'Source file unavailable for reprocess.', 'failure_reason' => 'parse_failed');
+    }
+
+    $mode = sanitize_key($mode);
+    if ($mode === '') {
+        $mode = sanitize_key((string) get_option('dcb_ocr_mode', 'auto'));
+    }
+
+    $result = class_exists('DCB_OCR_Engine_Manager')
+        ? DCB_OCR_Engine_Manager::extract_with_mode($file_path, $mime, $mode)
+        : dcb_upload_extract_text_from_file_local($file_path, $mime);
+
+    $result = dcb_ocr_normalize_result_shape((array) $result, sanitize_key((string) ($result['provider'] ?? $mode)));
+
+    update_post_meta($review_id, '_dcb_ocr_review_last_reprocess_at', current_time('mysql'));
+    update_post_meta($review_id, '_dcb_ocr_review_reprocess_count', max(0, (int) get_post_meta($review_id, '_dcb_ocr_review_reprocess_count', true)) + 1);
+    update_post_meta($review_id, '_dcb_ocr_review_extraction', wp_json_encode($result));
+    update_post_meta($review_id, '_dcb_ocr_review_text', (string) ($result['text'] ?? ''));
+    update_post_meta($review_id, '_dcb_ocr_review_confidence', round((float) ($result['confidence_proxy'] ?? 0), 4));
+    update_post_meta($review_id, '_dcb_ocr_review_confidence_bucket', sanitize_key((string) ($result['confidence_bucket'] ?? 'low')));
+    update_post_meta($review_id, '_dcb_ocr_review_provider', sanitize_key((string) ($result['provider'] ?? 'local')));
+    update_post_meta($review_id, '_dcb_ocr_review_mode', sanitize_key((string) ($result['mode'] ?? $mode)));
+    update_post_meta($review_id, '_dcb_ocr_review_failure_reason', dcb_ocr_normalize_failure_reason((string) ($result['failure_reason'] ?? '')));
+    update_post_meta($review_id, '_dcb_ocr_review_provenance', wp_json_encode((array) ($result['provenance'] ?? array())));
+    update_post_meta($review_id, '_dcb_ocr_review_page_count', isset($result['pages']) && is_array($result['pages']) ? count($result['pages']) : 0);
+
+    dcb_ocr_review_append_revision($review_id, 'reprocessed', array(
+        'mode' => $mode,
+        'provider' => (string) ($result['provider'] ?? ''),
+        'failure_reason' => (string) ($result['failure_reason'] ?? ''),
+    ));
+    dcb_ocr_review_update_status($review_id, 'reprocessed', 'OCR item was reprocessed.');
+
+    if (function_exists('do_action')) {
+        do_action('dcb_ocr_review_reprocessed', $review_id, $result, $mode);
+    }
+
+    return array('ok' => true, 'result' => $result);
+}
+
+function dcb_ocr_review_queue_summary(): array {
+    if (!class_exists('WP_Query')) {
+        return array('status_counts' => array(), 'failure_counts' => array());
+    }
+
+    $items = get_posts(array(
+        'post_type' => 'dcb_ocr_review_queue',
+        'post_status' => 'publish',
+        'posts_per_page' => 500,
+        'fields' => 'ids',
+    ));
+
+    $status_counts = array();
+    $failure_counts = array();
+    foreach ((array) $items as $id) {
+        $review_id = (int) $id;
+        if ($review_id < 1) {
+            continue;
+        }
+
+        $status = sanitize_key((string) get_post_meta($review_id, '_dcb_ocr_review_status', true));
+        if ($status === '') {
+            $status = 'pending_review';
+        }
+        if (!isset($status_counts[$status])) {
+            $status_counts[$status] = 0;
+        }
+        $status_counts[$status]++;
+
+        $failure = dcb_ocr_normalize_failure_reason((string) get_post_meta($review_id, '_dcb_ocr_review_failure_reason', true));
+        if ($failure === '') {
+            continue;
+        }
+        if (!isset($failure_counts[$failure])) {
+            $failure_counts[$failure] = 0;
+        }
+        $failure_counts[$failure]++;
+    }
+
+    ksort($status_counts);
+    arsort($failure_counts);
+
+    return array('status_counts' => $status_counts, 'failure_counts' => $failure_counts);
 }
 
 function dcb_upload_extract_text_from_file(string $file_path, string $mime): array {
     if (class_exists('DCB_OCR_Engine_Manager')) {
         $result = DCB_OCR_Engine_Manager::extract($file_path, $mime);
-        dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
+        $result = dcb_ocr_normalize_result_shape((array) $result, sanitize_key((string) ($result['provider'] ?? '')));
+        $review_item_id = dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
+        if ($review_item_id > 0) {
+            $result['review_item_id'] = $review_item_id;
+        }
         return $result;
     }
 
     $result = dcb_upload_extract_text_from_file_local($file_path, $mime);
-    dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
+    $result = dcb_ocr_normalize_result_shape((array) $result, 'local');
+    $review_item_id = dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
+    if ($review_item_id > 0) {
+        $result['review_item_id'] = $review_item_id;
+    }
     return $result;
 }
 
-function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, array $result): void {
+function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, array $result): int {
     $confidence = 0.0;
     $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
     if (!empty($pages)) {
@@ -846,7 +1214,7 @@ function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, arra
     $failure_reason = sanitize_key((string) ($result['failure_reason'] ?? ''));
     $needs_review = $failure_reason !== '' || $confidence < $threshold;
     if (!$needs_review) {
-        return;
+        return 0;
     }
 
     $title = sprintf('OCR Review: %s', sanitize_file_name((string) basename($file_path)));
@@ -856,16 +1224,55 @@ function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, arra
         'post_title' => $title . ' — ' . current_time('mysql'),
     ));
     if (is_wp_error($post_id) || (int) $post_id < 1) {
-        return;
+        return 0;
+    }
+
+    $safe_provider = sanitize_key((string) ($result['provider'] ?? 'local'));
+    $safe_mode = sanitize_key((string) ($result['mode'] ?? ($safe_provider === 'remote' ? 'remote' : 'local')));
+    $safe_failure_reason = dcb_ocr_normalize_failure_reason($failure_reason !== '' ? $failure_reason : 'low_confidence');
+    $failure_meta = dcb_ocr_failure_meta($safe_failure_reason);
+    $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
+    $candidate_count = isset($result['ocr_candidates']) && is_array($result['ocr_candidates']) ? count($result['ocr_candidates']) : 0;
+    $block_count = isset($result['template_blocks']) && is_array($result['template_blocks']) ? count($result['template_blocks']) : 0;
+
+    $extraction_json = wp_json_encode($result);
+    if (!is_string($extraction_json)) {
+        $extraction_json = '{}';
     }
 
     update_post_meta((int) $post_id, '_dcb_ocr_review_file', sanitize_text_field((string) basename($file_path)));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_source_file_path', sanitize_text_field($file_path));
     update_post_meta((int) $post_id, '_dcb_ocr_review_mime', sanitize_text_field($mime));
     update_post_meta((int) $post_id, '_dcb_ocr_review_confidence', round(max(0.0, min(1.0, $confidence)), 4));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_confidence_bucket', dcb_confidence_bucket($confidence));
     update_post_meta((int) $post_id, '_dcb_ocr_review_threshold', $threshold);
-    update_post_meta((int) $post_id, '_dcb_ocr_review_failure_reason', $failure_reason !== '' ? $failure_reason : 'low_confidence');
-    update_post_meta((int) $post_id, '_dcb_ocr_review_provider', sanitize_key((string) ($result['provider'] ?? 'local')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_failure_reason', $safe_failure_reason);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_failure_label', sanitize_text_field((string) ($failure_meta['label'] ?? 'OCR issue')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_recommendation', sanitize_text_field((string) ($failure_meta['recommendation'] ?? 'Review OCR output.')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_provider', $safe_provider);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_mode', $safe_mode);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_engine', sanitize_text_field((string) ($result['engine'] ?? 'none')));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_status', 'pending_review');
+    update_post_meta((int) $post_id, '_dcb_ocr_review_page_count', count($pages));
+    update_post_meta((int) $post_id, '_dcb_ocr_review_candidate_field_count', $candidate_count);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_block_count', $block_count);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_extraction', $extraction_json);
+    update_post_meta((int) $post_id, '_dcb_ocr_review_text', sanitize_textarea_field((string) ($result['text'] ?? '')));
     update_post_meta((int) $post_id, '_dcb_ocr_review_provenance', wp_json_encode((array) ($result['provenance'] ?? array())));
+
+    dcb_ocr_review_append_revision((int) $post_id, 'created', array(
+        'status' => 'pending_review',
+        'failure_reason' => $safe_failure_reason,
+        'provider' => $safe_provider,
+        'mode' => $safe_mode,
+        'confidence' => round(max(0.0, min(1.0, $confidence)), 4),
+    ));
+
+    if (function_exists('do_action')) {
+        do_action('dcb_ocr_review_item_created', (int) $post_id, $result);
+    }
+
+    return (int) $post_id;
 }
 
 function dcb_upload_stage_line_block_normalization(array $pages): array {

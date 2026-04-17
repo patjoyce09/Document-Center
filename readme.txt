@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.2.7
+Stable tag: 0.2.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,16 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.2.8 =
+* Added OCR review item operational status model: `pending_review`, `corrected`, `approved`, `rejected`, `reprocessed`.
+* Added OCR review queue admin operations: approve, corrected, reject, reprocess OCR, and promote reviewed draft payload.
+* Added manual correction loop with corrected text summary + corrected candidate fields while preserving original machine extraction snapshot.
+* Added OCR review revision trail metadata for auditability of status/correction/reprocess/promote actions.
+* Added normalized OCR failure taxonomy and recommendations (`empty_extraction`, `low_confidence`, `remote_config_invalid`, `remote_api_key_missing`, `remote_request_failed`, `remote_http_error`, `max_file_size_exceeded`, `unsupported_mime`, `local_binary_missing`, `rasterization_failed`, `extraction_timeout`, `parse_failed`).
+* Hardened remote OCR provider validation and extraction handling (HTTPS validation, API key checks, MIME/size guards, timeout/error mapping, defensive JSON response normalization).
+* Expanded OCR diagnostics with remote config validation, selected engine visibility, queue status counts, and failure reason summary.
+* Added OCR operations smoke test coverage and CI wiring.
+
 = 0.2.7 =
 * Added generic data-driven workflow routing rules with matching on form key, template id, status, field conditions, document type, and packet key.
 * Added assignment target model supporting user, role, and queue assignments with backward-compatible `_dcb_workflow_assignee_user_id` behavior.

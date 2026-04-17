@@ -51,6 +51,7 @@ final class DCB_Uploader {
             $text_result = dcb_upload_extract_text_from_file($path, $mime);
             $ocr = (array) ($text_result['ocr'] ?? array());
             $confidence = isset($ocr['confidence_proxy']) ? (float) $ocr['confidence_proxy'] : 0.0;
+            $review_item_id = isset($text_result['review_item_id']) ? (int) $text_result['review_item_id'] : 0;
 
             $routing_target = self::resolve_recipients($hint);
             $status = 'routed';
@@ -66,6 +67,7 @@ final class DCB_Uploader {
                 'ocr_bucket' => dcb_confidence_bucket($confidence),
                 'ocr_text' => (string) ($text_result['text'] ?? ''),
                 'ocr_meta' => wp_json_encode($ocr),
+                'ocr_review_item_id' => $review_item_id,
             ));
 
             if ($routing_target !== '') {
@@ -91,9 +93,10 @@ final class DCB_Uploader {
                 'confidence' => round($confidence, 3),
                 'error' => $error,
                 'logId' => $log_id,
+                'reviewItemId' => $review_item_id,
             );
 
-            if ($path !== '' && file_exists($path)) {
+            if ($review_item_id < 1 && $path !== '' && file_exists($path)) {
                 @unlink($path);
             }
         }

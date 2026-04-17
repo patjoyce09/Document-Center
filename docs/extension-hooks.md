@@ -42,6 +42,13 @@ Mutate payload before workflow notification triggers fire.
 3. `$event` (`string`)
 4. `$context` (`array`)
 
+### `dcb_ocr_review_item_created`
+Fires when an OCR review queue item is created from extraction results.
+
+**Arguments**
+1. `$review_id` (`int`)
+2. `$result` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`
@@ -89,3 +96,34 @@ Event-specific workflow notification trigger (dynamic suffix).
 **Arguments**
 1. `$submission_id` (`int`)
 2. `$payload` (`array`)
+
+### `dcb_ocr_review_status_changed`
+Fires when an OCR review item status changes.
+
+**Arguments**
+1. `$review_id` (`int`)
+2. `$from_status` (`string`)
+3. `$to_status` (`string`)
+4. `$note` (`string`)
+
+### `dcb_ocr_review_corrected`
+Fires when manual OCR corrections are saved.
+
+**Arguments**
+1. `$review_id` (`int`)
+2. `$corrections` (`array`)
+
+### `dcb_ocr_review_reprocessed`
+Fires when OCR review item is reprocessed.
+
+**Arguments**
+1. `$review_id` (`int`)
+2. `$result` (`array`)
+3. `$mode` (`string`)
+
+### `dcb_ocr_review_promoted_draft`
+Fires when reviewed OCR output is promoted to builder-compatible draft payload.
+
+**Arguments**
+1. `$review_id` (`int`)
+2. `$draft` (`array`)
