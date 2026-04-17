@@ -22,6 +22,7 @@ jobs:
           php tests/workflow_smoke.php
           php tests/ocr_engine_smoke.php
           php tests/capabilities_access_smoke.php
+          php tests/builder_maturity_smoke.php
 
   js-sanity:
     runs-on: ubuntu-latest

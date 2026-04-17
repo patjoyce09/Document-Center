@@ -90,6 +90,16 @@
     return selectOptions(map, selected || 'text');
   }
 
+  function conditionTargetOptions(form, selected) {
+    var map = { '': 'Select field...' };
+    asArray(form && form.fields).forEach(function (f) {
+      var key = slugify(f && f.key);
+      if (!key) return;
+      map[key] = key + (f && f.label ? ' — ' + String(f.label) : '');
+    });
+    return selectOptions(map, selected || '');
+  }
+
   function fieldTemplateButtons() {
     return [
       { k: 'text', l: 'Text Input' },
@@ -239,13 +249,16 @@
     $advanced.val(canonical);
   }
 
-  function renderConditions(conditions, path) {
+  function renderConditions(form, conditions, path) {
     var out = ['<div class="dcb-cond-list">'];
     asArray(conditions).forEach(function (c, ci) {
+      var op = String(c.operator || 'eq');
+      var isListOp = op === 'in' || op === 'not_in';
+      var valueText = isListOp ? asArray(c.values).join(', ') : (c.value || '');
       out.push('<div class="dcb-cond-row">'
-        + '<input type="text" placeholder="field_key" data-act="set-cond-field" data-path="' + path + '" data-ci="' + ci + '" value="' + escapeHtml(c.field || '') + '"/>'
+        + '<select data-act="set-cond-field" data-path="' + path + '" data-ci="' + ci + '">' + conditionTargetOptions(form, c.field || '') + '</select>'
         + '<select data-act="set-cond-op" data-path="' + path + '" data-ci="' + ci + '">' + selectOptions(operators, c.operator || 'eq') + '</select>'
-        + '<input type="text" placeholder="value or a,b,c" data-act="set-cond-value" data-path="' + path + '" data-ci="' + ci + '" value="' + escapeHtml(Array.isArray(c.values) ? c.values.join(', ') : (c.value || '')) + '"/>'
+        + '<input type="text" placeholder="' + (isListOp ? 'comma list: a,b,c' : 'single value') + '" data-act="set-cond-value" data-path="' + path + '" data-ci="' + ci + '" value="' + escapeHtml(valueText) + '"/>'
         + '<button type="button" class="button-link-delete" data-act="del-cond" data-path="' + path + '" data-ci="' + ci + '">Delete</button>'
         + '</div>');
     });
@@ -295,7 +308,7 @@
     html.push('<table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Type</th><th>Required</th><th>Actions</th></tr></thead><tbody>');
     asArray(form.fields).forEach(function (field, i) {
       html.push('<tr><td><input type="text" data-act="field-key" data-i="' + i + '" value="' + escapeHtml(field.key || '') + '"/></td><td><input type="text" data-act="field-label" data-i="' + i + '" value="' + escapeHtml(field.label || '') + '"/></td><td><select data-act="field-type" data-i="' + i + '">' + typeOptions(field.type || 'text') + '</select></td><td><input type="checkbox" data-act="field-required" data-i="' + i + '" ' + (field.required ? 'checked' : '') + '/></td><td><button type="button" class="button" data-act="field-insert-above" data-i="' + i + '">Insert Above</button> <button type="button" class="button" data-act="field-insert-below" data-i="' + i + '">Insert Below</button> <button type="button" class="button-link-delete" data-act="field-delete" data-i="' + i + '">Delete</button></td></tr>');
-      html.push('<tr><td colspan="5"><strong>Conditions</strong>' + renderConditions(field.conditions, 'field:' + i) + '</td></tr>');
+      html.push('<tr><td colspan="5"><strong>Conditions</strong>' + renderConditions(form, field.conditions, 'field:' + i) + '</td></tr>');
     });
     if (!asArray(form.fields).length) html.push('<tr><td colspan="5">No fields yet.</td></tr>');
     html.push('</tbody></table></section>');
@@ -321,7 +334,7 @@
     html.push('<section class="dcb-panel"><h3>Hard Stops</h3><table class="widefat striped"><thead><tr><th>Rule Label</th><th>Severity</th><th>Type</th><th>Message</th><th></th></tr></thead><tbody>');
     asArray(form.hard_stops).forEach(function (h, i) {
       html.push('<tr><td><input type="text" data-act="hs-label" data-i="' + i + '" value="' + escapeHtml(h.label || '') + '"/></td><td><select data-act="hs-severity" data-i="' + i + '">' + selectOptions(severities, h.severity || 'error') + '</select></td><td><input type="text" data-act="hs-type" data-i="' + i + '" value="' + escapeHtml(h.type || '') + '"/></td><td><input type="text" data-act="hs-message" data-i="' + i + '" value="' + escapeHtml(h.message || '') + '"/></td><td><button type="button" class="button-link-delete" data-act="hs-delete" data-i="' + i + '">Delete</button></td></tr>');
-      html.push('<tr><td colspan="5"><strong>Conditions</strong>' + renderConditions(h.when, 'hard:' + i) + '</td></tr>');
+      html.push('<tr><td colspan="5"><strong>Conditions</strong>' + renderConditions(form, h.when, 'hard:' + i) + '</td></tr>');
     });
     html.push('</tbody></table><p><button type="button" class="button" data-act="hs-add">Add Hard Stop</button></p></section>');
 
