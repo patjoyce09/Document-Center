@@ -1,0 +1,24 @@
+{
+  "id": "checkbox_heavy",
+  "label": "Checkbox Form",
+  "pages": [
+    {
+      "page_number": 1,
+      "engine": "fixture",
+      "confidence_proxy": 0.84,
+      "text": "SYMPTOM CHECKLIST\nFever [ ] Yes [ ] No\nCough [ ] Yes [ ] No\nShortness of Breath [ ] Yes [ ] No\nNausea [ ] Yes [ ] No\n\nTRIAGE\nUrgent Care Needed [ ] Yes [ ] No"
+    }
+  ],
+  "expected": {
+    "fields": [
+      {"key": "fever", "type": "yes_no"},
+      {"key": "cough", "type": "yes_no"},
+      {"key": "shortness_of_breath", "type": "yes_no"},
+      {"key": "nausea", "type": "yes_no"},
+      {"key": "urgent_care_needed", "type": "yes_no"}
+    ],
+    "sections": ["symptom_checklist", "triage"],
+    "min_repeater_count": 0,
+    "max_false_positive": 2
+  }
+}

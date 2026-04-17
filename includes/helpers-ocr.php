@@ -1015,6 +1015,7 @@ function dcb_ocr_review_apply_manual_corrections(int $review_id, array $correcti
 
     if (isset($corrections['candidate_fields']) && is_array($corrections['candidate_fields'])) {
         update_post_meta($review_id, '_dcb_ocr_review_corrected_candidates', wp_json_encode($corrections['candidate_fields']));
+        dcb_ocr_update_correction_rules_from_review((array) $corrections['candidate_fields']);
     }
 
     dcb_ocr_review_append_revision($review_id, 'manual_correction_saved', array(
@@ -1027,6 +1028,54 @@ function dcb_ocr_review_apply_manual_corrections(int $review_id, array $correcti
     if (function_exists('do_action')) {
         do_action('dcb_ocr_review_corrected', $review_id, $corrections);
     }
+}
+
+function dcb_ocr_enrich_extraction_result(array $result): array {
+    $result = dcb_ocr_normalize_result_shape($result, sanitize_key((string) ($result['provider'] ?? '')));
+
+    $pages = isset($result['pages']) && is_array($result['pages']) ? $result['pages'] : array();
+    if (empty($pages)) {
+        $pages[] = array(
+            'page_number' => 1,
+            'text' => (string) ($result['text'] ?? ''),
+            'engine' => sanitize_text_field((string) ($result['engine'] ?? 'unknown')),
+            'text_length' => strlen((string) ($result['text'] ?? '')),
+            'confidence_proxy' => (float) ($result['confidence_proxy'] ?? 0),
+        );
+    }
+
+    $document_model = dcb_ocr_build_document_model($pages);
+    $page_meta = array();
+    foreach ($pages as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $pn = max(1, (int) ($page['page_number'] ?? 1));
+        $page_meta[$pn] = array(
+            'page_number' => $pn,
+            'engine' => sanitize_key((string) ($page['engine'] ?? 'unknown')),
+            'text_length' => max(0, (int) ($page['text_length'] ?? strlen((string) ($page['text'] ?? '')))),
+            'confidence_proxy' => round(max(0, min(1, (float) ($page['confidence_proxy'] ?? 0))), 4),
+        );
+    }
+
+    $candidates = dcb_upload_stage_field_candidate_extraction($document_model, $page_meta);
+    $template_blocks = dcb_upload_stage_template_block_extraction($document_model);
+
+    $result['ocr_document_model'] = $document_model;
+    $result['ocr_candidates'] = dcb_ocr_normalize_candidates_runtime($candidates);
+    $result['template_blocks'] = $template_blocks;
+    $result['quality_metrics'] = array(
+        'field_candidate_count' => count($result['ocr_candidates']),
+        'section_candidate_count' => isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? count($document_model['section_candidates']) : 0,
+        'table_candidate_count' => isset($document_model['table_candidates']) && is_array($document_model['table_candidates']) ? count($document_model['table_candidates']) : 0,
+        'signature_candidate_count' => isset($document_model['signature_date_candidates']) && is_array($document_model['signature_date_candidates']) ? count($document_model['signature_date_candidates']) : 0,
+        'false_positive_risk_count' => count(array_filter($result['ocr_candidates'], static function ($row) {
+            return is_array($row) && (string) ($row['warning_state'] ?? '') === 'review_needed';
+        })),
+    );
+
+    return $result;
 }
 
 function dcb_ocr_review_promote_builder_draft(int $review_id): array {
@@ -1095,7 +1144,7 @@ function dcb_ocr_review_reprocess(int $review_id, string $mode = ''): array {
         ? DCB_OCR_Engine_Manager::extract_with_mode($file_path, $mime, $mode)
         : dcb_upload_extract_text_from_file_local($file_path, $mime);
 
-    $result = dcb_ocr_normalize_result_shape((array) $result, sanitize_key((string) ($result['provider'] ?? $mode)));
+    $result = dcb_ocr_enrich_extraction_result((array) $result);
 
     update_post_meta($review_id, '_dcb_ocr_review_last_reprocess_at', current_time('mysql'));
     update_post_meta($review_id, '_dcb_ocr_review_reprocess_count', max(0, (int) get_post_meta($review_id, '_dcb_ocr_review_reprocess_count', true)) + 1);
@@ -1171,7 +1220,7 @@ function dcb_ocr_review_queue_summary(): array {
 function dcb_upload_extract_text_from_file(string $file_path, string $mime): array {
     if (class_exists('DCB_OCR_Engine_Manager')) {
         $result = DCB_OCR_Engine_Manager::extract($file_path, $mime);
-        $result = dcb_ocr_normalize_result_shape((array) $result, sanitize_key((string) ($result['provider'] ?? '')));
+        $result = dcb_ocr_enrich_extraction_result((array) $result);
         $review_item_id = dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
         if ($review_item_id > 0) {
             $result['review_item_id'] = $review_item_id;
@@ -1180,7 +1229,7 @@ function dcb_upload_extract_text_from_file(string $file_path, string $mime): arr
     }
 
     $result = dcb_upload_extract_text_from_file_local($file_path, $mime);
-    $result = dcb_ocr_normalize_result_shape((array) $result, 'local');
+    $result = dcb_ocr_enrich_extraction_result((array) $result);
     $review_item_id = dcb_ocr_maybe_enqueue_review_item($file_path, $mime, $result);
     if ($review_item_id > 0) {
         $result['review_item_id'] = $review_item_id;
@@ -1278,6 +1327,8 @@ function dcb_ocr_maybe_enqueue_review_item(string $file_path, string $mime, arra
 function dcb_upload_stage_line_block_normalization(array $pages): array {
     $lines = array();
     $blocks = array();
+    $line_index = 0;
+    $block_index = 0;
 
     foreach ($pages as $page) {
         if (!is_array($page)) {
@@ -1293,7 +1344,11 @@ function dcb_upload_stage_line_block_normalization(array $pages): array {
         foreach ($raw_blocks as $block) {
             $clean_block = trim((string) preg_replace('/[ \t]+/', ' ', $block));
             if ($clean_block !== '' && strlen($clean_block) >= 6) {
-                $blocks[] = array('page_number' => $page_number, 'text' => $clean_block);
+                $blocks[] = array(
+                    'block_index' => $block_index++,
+                    'page_number' => $page_number,
+                    'text' => $clean_block,
+                );
             }
         }
 
@@ -1303,31 +1358,343 @@ function dcb_upload_stage_line_block_normalization(array $pages): array {
             if ($clean_line === '' || strlen($clean_line) < 2 || strlen($clean_line) > 180) {
                 continue;
             }
-            $lines[] = array('page_number' => $page_number, 'text' => $clean_line);
+            $lines[] = array(
+                'line_index' => $line_index++,
+                'page_number' => $page_number,
+                'text' => $clean_line,
+            );
         }
     }
 
     return array('lines' => $lines, 'blocks' => $blocks);
 }
 
+function dcb_ocr_correction_rules_default(): array {
+    return array(
+        'label_aliases' => array(),
+        'type_overrides' => array(),
+        'section_patterns' => array(),
+    );
+}
+
+function dcb_ocr_get_correction_rules(): array {
+    $raw = get_option('dcb_ocr_correction_rules', array());
+    if (!is_array($raw)) {
+        return dcb_ocr_correction_rules_default();
+    }
+
+    $defaults = dcb_ocr_correction_rules_default();
+    $aliases = isset($raw['label_aliases']) && is_array($raw['label_aliases']) ? $raw['label_aliases'] : array();
+    $type_overrides = isset($raw['type_overrides']) && is_array($raw['type_overrides']) ? $raw['type_overrides'] : array();
+    $section_patterns = isset($raw['section_patterns']) && is_array($raw['section_patterns']) ? $raw['section_patterns'] : array();
+
+    $clean_aliases = array();
+    foreach ($aliases as $from => $to) {
+        $from_key = dcb_upload_normalize_text((string) $from);
+        $to_value = sanitize_text_field((string) $to);
+        if ($from_key !== '' && $to_value !== '') {
+            $clean_aliases[$from_key] = $to_value;
+        }
+    }
+
+    $clean_types = array();
+    foreach ($type_overrides as $label_key => $type) {
+        $k = dcb_upload_normalize_text((string) $label_key);
+        $t = sanitize_key((string) $type);
+        if ($k !== '' && $t !== '') {
+            $clean_types[$k] = $t;
+        }
+    }
+
+    $clean_sections = array();
+    foreach ($section_patterns as $pattern => $section_label) {
+        $p = dcb_upload_normalize_text((string) $pattern);
+        $s = sanitize_text_field((string) $section_label);
+        if ($p !== '' && $s !== '') {
+            $clean_sections[$p] = $s;
+        }
+    }
+
+    return array_merge($defaults, array(
+        'label_aliases' => $clean_aliases,
+        'type_overrides' => $clean_types,
+        'section_patterns' => $clean_sections,
+    ));
+}
+
+function dcb_ocr_update_correction_rules_from_review(array $review_rows): void {
+    if (empty($review_rows)) {
+        return;
+    }
+
+    $rules = dcb_ocr_get_correction_rules();
+    $aliases = isset($rules['label_aliases']) && is_array($rules['label_aliases']) ? $rules['label_aliases'] : array();
+    $type_overrides = isset($rules['type_overrides']) && is_array($rules['type_overrides']) ? $rules['type_overrides'] : array();
+
+    foreach ($review_rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $decision = sanitize_key((string) ($row['decision'] ?? 'accept'));
+        if ($decision === 'reject') {
+            continue;
+        }
+
+        $label = sanitize_text_field((string) ($row['field_label'] ?? ''));
+        $source = sanitize_text_field((string) ($row['source_text_snippet'] ?? ''));
+        $suggested_type = sanitize_key((string) ($row['suggested_type'] ?? ''));
+
+        $source_key = dcb_upload_normalize_text($source);
+        $label_key = dcb_upload_normalize_text($label);
+        if ($source_key !== '' && $label !== '' && $source_key !== $label_key) {
+            $aliases[$source_key] = $label;
+        }
+        if ($label_key !== '' && $suggested_type !== '') {
+            $type_overrides[$label_key] = $suggested_type;
+        }
+    }
+
+    if (count($aliases) > 250) {
+        $aliases = array_slice($aliases, -250, null, true);
+    }
+    if (count($type_overrides) > 250) {
+        $type_overrides = array_slice($type_overrides, -250, null, true);
+    }
+
+    $updated = array(
+        'label_aliases' => $aliases,
+        'type_overrides' => $type_overrides,
+        'section_patterns' => isset($rules['section_patterns']) && is_array($rules['section_patterns']) ? $rules['section_patterns'] : array(),
+    );
+
+    update_option('dcb_ocr_correction_rules', $updated, false);
+
+    if (function_exists('do_action')) {
+        do_action('dcb_ocr_correction_rules_updated', $updated);
+    }
+}
+
+function dcb_ocr_is_probable_heading(string $line): bool {
+    $line = trim($line);
+    if ($line === '') {
+        return false;
+    }
+    if (preg_match('/^(section|part|page)\s+[a-z0-9]+[:\-]?/i', $line)) {
+        return true;
+    }
+    $alpha = (int) preg_match_all('/[A-Za-z]/', $line);
+    $upper = (int) preg_match_all('/[A-Z]/', $line);
+    $ratio = $alpha > 0 ? ($upper / max(1, $alpha)) : 0;
+    return strlen($line) <= 90 && $ratio >= 0.72 && !preg_match('/[:_]{1,}/', $line);
+}
+
+function dcb_ocr_is_instructional_line(string $line): bool {
+    $line = strtolower(trim($line));
+    if ($line === '') {
+        return false;
+    }
+    return (bool) preg_match('/\b(please|instructions?|complete all|attach|submit|for office use|do not write|read carefully|return this form)\b/', $line);
+}
+
+function dcb_ocr_extract_anchors_from_line(string $line): array {
+    $anchors = array();
+    if (preg_match('/_{3,}|\.{3,}|-{3,}/', $line)) {
+        $anchors[] = 'blank_line';
+    }
+    if (preg_match('/:\s*$/', $line) || preg_match('/^[^:]{2,80}:/', $line)) {
+        $anchors[] = 'colon_label';
+    }
+    if (preg_match('/\[[ xX]?\]/', $line) || strpos($line, '☐') !== false || strpos($line, '☑') !== false) {
+        $anchors[] = 'checkbox_marker';
+    }
+    if (preg_match('/\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line)) {
+        $anchors[] = 'yes_no_pair';
+    }
+    if (preg_match('/\b(signature|sign here|signed by)\b/i', $line)) {
+        $anchors[] = 'signature_line';
+    }
+    if (preg_match('/\b(date|dob|birth date|mm\/dd|yyyy)\b/i', $line)) {
+        $anchors[] = 'date_line';
+    }
+    return array_values(array_unique($anchors));
+}
+
+function dcb_ocr_detect_section_candidates(array $lines): array {
+    $sections = array();
+    foreach ($lines as $line_row) {
+        if (!is_array($line_row)) {
+            continue;
+        }
+        $text = (string) ($line_row['text'] ?? '');
+        if ($text === '' || strlen($text) < 4 || strlen($text) > 110) {
+            continue;
+        }
+        if (!dcb_ocr_is_probable_heading($text) && !preg_match('/^(section|part)\b/i', $text)) {
+            continue;
+        }
+        $label = sanitize_text_field(trim(preg_replace('/\s+/', ' ', $text)));
+        $sections[] = array(
+            'section_key' => sanitize_key($label),
+            'label' => $label,
+            'page_number' => max(1, (int) ($line_row['page_number'] ?? 1)),
+            'line_index' => max(0, (int) ($line_row['line_index'] ?? 0)),
+            'confidence_score' => 0.70,
+        );
+    }
+
+    if (empty($sections)) {
+        $sections[] = array('section_key' => 'main_section', 'label' => 'Main Section', 'page_number' => 1, 'line_index' => 0, 'confidence_score' => 0.50);
+    }
+    return $sections;
+}
+
+function dcb_ocr_detect_table_candidates(array $lines): array {
+    $rows = array();
+    foreach ($lines as $line_row) {
+        if (!is_array($line_row)) {
+            continue;
+        }
+        $line = (string) ($line_row['text'] ?? '');
+        $looks_table = preg_match('/\|/', $line)
+            || preg_match('/\s{3,}[A-Za-z0-9]/', $line)
+            || preg_match('/\b(item|qty|quantity|description|amount|date|time)\b/i', $line);
+        if (!$looks_table) {
+            continue;
+        }
+        $rows[] = array(
+            'page_number' => max(1, (int) ($line_row['page_number'] ?? 1)),
+            'line_index' => max(0, (int) ($line_row['line_index'] ?? 0)),
+            'text' => sanitize_text_field($line),
+        );
+    }
+
+    if (count($rows) < 2) {
+        return array();
+    }
+
+    return array(array(
+        'table_key' => 'table_1',
+        'row_count_hint' => count($rows),
+        'page_number' => (int) ($rows[0]['page_number'] ?? 1),
+        'line_start' => (int) ($rows[0]['line_index'] ?? 0),
+        'line_end' => (int) ($rows[count($rows) - 1]['line_index'] ?? 0),
+        'confidence_score' => min(0.9, 0.50 + (0.05 * count($rows))),
+    ));
+}
+
+function dcb_ocr_detect_signature_candidates(array $lines): array {
+    $out = array();
+    foreach ($lines as $line_row) {
+        if (!is_array($line_row)) {
+            continue;
+        }
+        $line = (string) ($line_row['text'] ?? '');
+        if (!preg_match('/\b(signature|initials|sign here|date)\b/i', $line)) {
+            continue;
+        }
+        $out[] = array(
+            'page_number' => max(1, (int) ($line_row['page_number'] ?? 1)),
+            'line_index' => max(0, (int) ($line_row['line_index'] ?? 0)),
+            'text' => sanitize_text_field($line),
+            'kind' => preg_match('/\binitials\b/i', $line) ? 'initials' : (preg_match('/\bdate\b/i', $line) ? 'date' : 'signature'),
+            'confidence_score' => 0.74,
+        );
+    }
+    return $out;
+}
+
+function dcb_ocr_build_document_model(array $pages): array {
+    $normalized = dcb_upload_stage_line_block_normalization($pages);
+    $lines = isset($normalized['lines']) && is_array($normalized['lines']) ? $normalized['lines'] : array();
+    $blocks = isset($normalized['blocks']) && is_array($normalized['blocks']) ? $normalized['blocks'] : array();
+
+    $anchors = array();
+    foreach ($lines as $line_row) {
+        if (!is_array($line_row)) {
+            continue;
+        }
+        $line = (string) ($line_row['text'] ?? '');
+        foreach (dcb_ocr_extract_anchors_from_line($line) as $anchor) {
+            $anchors[] = array(
+                'anchor' => $anchor,
+                'page_number' => max(1, (int) ($line_row['page_number'] ?? 1)),
+                'line_index' => max(0, (int) ($line_row['line_index'] ?? 0)),
+                'source_text' => sanitize_text_field(mb_substr($line, 0, 140)),
+            );
+        }
+    }
+
+    $section_candidates = dcb_ocr_detect_section_candidates($lines);
+    $table_candidates = dcb_ocr_detect_table_candidates($lines);
+    $signature_candidates = dcb_ocr_detect_signature_candidates($lines);
+
+    $model_pages = array();
+    foreach ($pages as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $model_pages[] = array(
+            'page_number' => max(1, (int) ($page['page_number'] ?? 1)),
+            'engine' => sanitize_text_field((string) ($page['engine'] ?? 'unknown')),
+            'text_length' => max(0, (int) ($page['text_length'] ?? strlen((string) ($page['text'] ?? '')))),
+            'confidence_proxy' => round(max(0, min(1, (float) ($page['confidence_proxy'] ?? 0))), 4),
+        );
+    }
+
+    $model = array(
+        'model_version' => '1.0',
+        'pages' => $model_pages,
+        'blocks' => $blocks,
+        'lines' => $lines,
+        'anchors' => $anchors,
+        'field_groups' => array(),
+        'section_candidates' => $section_candidates,
+        'table_candidates' => $table_candidates,
+        'signature_date_candidates' => $signature_candidates,
+    );
+
+    return function_exists('apply_filters') ? (array) apply_filters('dcb_ocr_document_model', $model, $pages) : $model;
+}
+
 function dcb_upload_guess_field_shape(string $label, string $source_line): array {
     $lower = strtolower($label . ' ' . $source_line);
-    $shape = array('suggested_type' => 'text', 'form_type' => 'text', 'max' => 180, 'options' => array());
+    $shape = array('suggested_type' => 'text', 'form_type' => 'text', 'max' => 180, 'options' => array(), 'detected_type' => 'text');
 
     if (preg_match('/\b(consent|agree|attest|authorize|acknowledge|permission)\b/', $lower)) {
-        return array('suggested_type' => 'checkbox', 'form_type' => 'checkbox', 'max' => 0, 'options' => array());
+        return array('suggested_type' => 'checkbox', 'form_type' => 'checkbox', 'max' => 0, 'options' => array(), 'detected_type' => 'checkbox');
     }
     if (preg_match('/\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b|\[[ xX]?\]\s*yes.*\[[ xX]?\]\s*no/', $lower)) {
-        return array('suggested_type' => 'radio_yes_no', 'form_type' => 'select', 'max' => 0, 'options' => array('yes' => 'Yes', 'no' => 'No'));
+        return array('suggested_type' => 'yes_no', 'form_type' => 'yes_no', 'max' => 0, 'options' => array('yes' => 'Yes', 'no' => 'No'), 'detected_type' => 'yes_no');
     }
     if (preg_match('/\b(e\-?mail)\b/', $lower)) {
-        return array('suggested_type' => 'email', 'form_type' => 'email', 'max' => 190, 'options' => array());
+        return array('suggested_type' => 'email', 'form_type' => 'email', 'max' => 190, 'options' => array(), 'detected_type' => 'email');
     }
-    if (preg_match('/\b(date|dob|birth|mm\/dd|yyyy)\b/', $lower)) {
-        return array('suggested_type' => 'date', 'form_type' => 'date', 'max' => 180, 'options' => array());
+    if (preg_match('/\b(phone|mobile|cell|fax|tel)\b/', $lower)) {
+        return array('suggested_type' => 'phone', 'form_type' => 'text', 'max' => 40, 'options' => array(), 'detected_type' => 'phone');
+    }
+    if (preg_match('/\b(date of birth|dob|birth date)\b/', $lower)) {
+        return array('suggested_type' => 'dob', 'form_type' => 'date', 'max' => 30, 'options' => array(), 'detected_type' => 'dob');
+    }
+    if (preg_match('/\b(date|mm\/dd|yyyy)\b/', $lower)) {
+        return array('suggested_type' => 'date', 'form_type' => 'date', 'max' => 30, 'options' => array(), 'detected_type' => 'date');
     }
     if (preg_match('/\btime\b|\bam\b|\bpm\b/', $lower)) {
-        return array('suggested_type' => 'time', 'form_type' => 'time', 'max' => 180, 'options' => array());
+        return array('suggested_type' => 'time', 'form_type' => 'time', 'max' => 30, 'options' => array(), 'detected_type' => 'time');
+    }
+    if (preg_match('/\b(signature|sign here|signed by)\b/', $lower)) {
+        return array('suggested_type' => 'signature', 'form_type' => 'text', 'max' => 180, 'options' => array(), 'detected_type' => 'signature');
+    }
+    if (preg_match('/\binitials?\b/', $lower)) {
+        return array('suggested_type' => 'initials', 'form_type' => 'text', 'max' => 12, 'options' => array(), 'detected_type' => 'initials');
+    }
+    if (preg_match('/\b(amount|total|qty|quantity|number|no\.)\b/', $lower)) {
+        return array('suggested_type' => 'number', 'form_type' => 'number', 'max' => 40, 'options' => array(), 'detected_type' => 'number');
+    }
+    if (preg_match('/\b(address|notes|comments|description|history|reason)\b/', $lower)) {
+        return array('suggested_type' => 'textarea', 'form_type' => 'text', 'max' => 400, 'options' => array(), 'detected_type' => 'textarea');
+    }
+    if (preg_match('/\b(select|choose|option)\b/', $lower)) {
+        return array('suggested_type' => 'select', 'form_type' => 'select', 'max' => 0, 'options' => array('option_1' => 'Option 1', 'option_2' => 'Option 2'), 'detected_type' => 'select');
     }
 
     return $shape;
@@ -1350,10 +1717,33 @@ function dcb_upload_guess_required(string $label, string $source_line, string $s
     return false;
 }
 
-function dcb_upload_stage_field_candidate_extraction(array $normalized, array $page_meta): array {
-    $lines = isset($normalized['lines']) && is_array($normalized['lines']) ? $normalized['lines'] : array();
+function dcb_upload_stage_field_candidate_extraction(array $document_model, array $page_meta): array {
+    $lines = isset($document_model['lines']) && is_array($document_model['lines']) ? $document_model['lines'] : array();
+    $sections = isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? $document_model['section_candidates'] : array();
+    $rules = dcb_ocr_get_correction_rules();
     $candidates = array();
     $seen = array();
+
+    usort($lines, static function ($a, $b) {
+        $pa = (int) ($a['page_number'] ?? 1);
+        $pb = (int) ($b['page_number'] ?? 1);
+        if ($pa !== $pb) {
+            return $pa <=> $pb;
+        }
+        return ((int) ($a['line_index'] ?? 0)) <=> ((int) ($b['line_index'] ?? 0));
+    });
+
+    $current_section = 'main_section';
+    foreach ($sections as $section_row) {
+        if (!is_array($section_row)) {
+            continue;
+        }
+        if ((int) ($section_row['line_index'] ?? 0) <= 0) {
+            continue;
+        }
+        $current_section = sanitize_key((string) ($section_row['section_key'] ?? 'main_section'));
+        break;
+    }
 
     foreach ($lines as $line_row) {
         if (!is_array($line_row)) {
@@ -1362,6 +1752,18 @@ function dcb_upload_stage_field_candidate_extraction(array $normalized, array $p
         $line = (string) ($line_row['text'] ?? '');
         $page_number = max(1, (int) ($line_row['page_number'] ?? 1));
         if ($line === '') {
+            continue;
+        }
+
+        if (dcb_ocr_is_probable_heading($line)) {
+            $current_section = sanitize_key($line);
+            if ($current_section === '') {
+                $current_section = 'main_section';
+            }
+            continue;
+        }
+
+        if (dcb_ocr_is_instructional_line($line)) {
             continue;
         }
 
@@ -1383,6 +1785,15 @@ function dcb_upload_stage_field_candidate_extraction(array $normalized, array $p
             continue;
         }
 
+        if (preg_match('/\b(please|instructions?|for office use|return this|do not write|reviewed by)\b/i', $candidate_label)) {
+            continue;
+        }
+
+        $label_key = dcb_upload_normalize_text($candidate_label);
+        if ($label_key !== '' && !empty($rules['label_aliases'][$label_key])) {
+            $candidate_label = sanitize_text_field((string) $rules['label_aliases'][$label_key]);
+        }
+
         $key = sanitize_key(str_replace(array('/', '-', '.'), '_', $candidate_label));
         if ($key === '') {
             continue;
@@ -1393,15 +1804,35 @@ function dcb_upload_stage_field_candidate_extraction(array $normalized, array $p
         $snippet = trim(substr($line, 0, 140));
 
         $page_conf = isset($page_meta[$page_number]['confidence_proxy']) ? (float) $page_meta[$page_number]['confidence_proxy'] : 0.0;
-        $score = max(0.0, min(1.0, $base_confidence + (0.18 * $page_conf)));
+        $anchor_bonus = 0.0;
+        if (preg_match('/_{3,}|\.{3,}/', $line)) {
+            $anchor_bonus += 0.08;
+        }
+        if (preg_match('/\[[ xX]?\]/', $line)) {
+            $anchor_bonus += 0.07;
+        }
+        if (preg_match('/\b(signature|date)\b/i', $line)) {
+            $anchor_bonus += 0.06;
+        }
+        $score = max(0.0, min(1.0, $base_confidence + (0.18 * $page_conf) + $anchor_bonus));
         $source_engine = isset($page_meta[$page_number]['engine']) ? sanitize_key((string) $page_meta[$page_number]['engine']) : '';
+
+        if ($label_key !== '' && !empty($rules['type_overrides'][$label_key])) {
+            $shape['suggested_type'] = sanitize_key((string) $rules['type_overrides'][$label_key]);
+            if (in_array($shape['suggested_type'], dcb_allowed_field_types(), true)) {
+                $shape['form_type'] = $shape['suggested_type'];
+            }
+        }
 
         $candidate = array(
             'field_label' => $candidate_label,
             'suggested_key' => $key,
             'suggested_type' => (string) ($shape['suggested_type'] ?? 'text'),
+            'detected_type' => (string) ($shape['detected_type'] ?? ($shape['suggested_type'] ?? 'text')),
             'required_guess' => $required,
             'page_number' => $page_number,
+            'line_index' => max(0, (int) ($line_row['line_index'] ?? 0)),
+            'section_hint' => $current_section,
             'source_text_snippet' => $snippet,
             'confidence_score' => round($score, 4),
             'confidence_bucket' => dcb_confidence_bucket($score),
@@ -1411,7 +1842,12 @@ function dcb_upload_stage_field_candidate_extraction(array $normalized, array $p
             'form_type' => (string) ($shape['form_type'] ?? 'text'),
             'max' => isset($shape['max']) ? (int) $shape['max'] : 180,
             'options' => isset($shape['options']) && is_array($shape['options']) ? $shape['options'] : array(),
+            'confidence_reasons' => array('signal_' . $signal, 'page_confidence', 'anchor_context'),
         );
+
+        if (function_exists('apply_filters')) {
+            $candidate = (array) apply_filters('dcb_ocr_candidate_enriched', $candidate, $line_row, $document_model, $page_meta);
+        }
 
         if (isset($seen[$key])) {
             $existing_idx = (int) $seen[$key];
@@ -1432,10 +1868,24 @@ function dcb_upload_stage_field_candidate_extraction(array $normalized, array $p
     return $candidates;
 }
 
-function dcb_upload_stage_template_block_extraction(array $normalized): array {
-    $blocks = isset($normalized['blocks']) && is_array($normalized['blocks']) ? $normalized['blocks'] : array();
+function dcb_upload_stage_template_block_extraction(array $document_model): array {
+    $blocks = isset($document_model['blocks']) && is_array($document_model['blocks']) ? $document_model['blocks'] : array();
+    $lines = isset($document_model['lines']) && is_array($document_model['lines']) ? $document_model['lines'] : array();
     $template_blocks = array();
     $seen = array();
+
+    foreach ($lines as $line_row) {
+        if (!is_array($line_row)) {
+            continue;
+        }
+        $line = trim((string) ($line_row['text'] ?? ''));
+        if ($line === '' || strlen($line) < 3 || strlen($line) > 120) {
+            continue;
+        }
+        if (dcb_ocr_is_probable_heading($line)) {
+            $template_blocks[] = array('type' => 'section_header', 'text' => $line);
+        }
+    }
 
     foreach ($blocks as $row) {
         if (!is_array($row)) {
@@ -1453,7 +1903,8 @@ function dcb_upload_stage_template_block_extraction(array $normalized): array {
         }
         $seen[$key] = true;
 
-        $entry = array('type' => 'paragraph', 'text' => $text, 'source_page' => $page_number, 'source_text_snippet' => mb_substr($text, 0, 120));
+        $entry_type = dcb_ocr_is_instructional_line($text) ? 'paragraph' : (dcb_ocr_is_probable_heading($text) ? 'section_header' : 'paragraph');
+        $entry = array('type' => $entry_type, 'text' => $text, 'source_page' => $page_number, 'source_text_snippet' => mb_substr($text, 0, 120));
 
         $clean = dcb_normalize_template_block($entry);
         if ($clean !== null) {
@@ -1473,19 +1924,79 @@ function dcb_upload_stage_template_block_extraction(array $normalized): array {
     return $template_blocks;
 }
 
-function dcb_upload_stage_draft_schema_generation(array $candidates, string $label, array $page_meta): array {
+function dcb_ocr_normalize_candidates_runtime(array $candidates): array {
+    if (function_exists('dcb_normalize_ocr_candidates')) {
+        return dcb_normalize_ocr_candidates($candidates);
+    }
+
+    $out = array();
+    foreach ($candidates as $candidate) {
+        if (!is_array($candidate)) {
+            continue;
+        }
+        $field_label = sanitize_text_field((string) ($candidate['field_label'] ?? ''));
+        $suggested_key = sanitize_key((string) ($candidate['suggested_key'] ?? ''));
+        if ($field_label === '' || $suggested_key === '') {
+            continue;
+        }
+        $out[] = array(
+            'field_label' => $field_label,
+            'suggested_key' => $suggested_key,
+            'suggested_type' => sanitize_key((string) ($candidate['suggested_type'] ?? 'text')),
+            'required_guess' => !empty($candidate['required_guess']),
+            'page_number' => max(1, (int) ($candidate['page_number'] ?? 1)),
+            'source_text_snippet' => sanitize_text_field((string) ($candidate['source_text_snippet'] ?? '')),
+            'confidence_bucket' => sanitize_key((string) ($candidate['confidence_bucket'] ?? 'low')),
+            'confidence_score' => round(max(0, min(1, (float) ($candidate['confidence_score'] ?? 0))), 4),
+            'source_engine' => sanitize_key((string) ($candidate['source_engine'] ?? '')),
+            'warning_state' => sanitize_key((string) ($candidate['warning_state'] ?? 'none')),
+        );
+    }
+
+    return $out;
+}
+
+function dcb_upload_stage_draft_schema_generation(array $candidates, string $label, array $page_meta, array $document_model = array(), array $template_blocks = array()): array {
     usort($candidates, static function ($a, $b) {
         $page_a = (int) ($a['page_number'] ?? 1);
         $page_b = (int) ($b['page_number'] ?? 1);
         if ($page_a !== $page_b) {
             return $page_a <=> $page_b;
         }
+        $line_a = (int) ($a['line_index'] ?? 0);
+        $line_b = (int) ($b['line_index'] ?? 0);
+        if ($line_a !== $line_b) {
+            return $line_a <=> $line_b;
+        }
         return ((float) ($b['confidence_score'] ?? 0)) <=> ((float) ($a['confidence_score'] ?? 0));
     });
 
     $fields = array();
     $seen = array();
+    $sections_index = array();
+    $section_order = array();
     $confidence_counts = array('low' => 0, 'medium' => 0, 'high' => 0);
+
+    $section_rows = isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? $document_model['section_candidates'] : array();
+    foreach ($section_rows as $section_row) {
+        if (!is_array($section_row)) {
+            continue;
+        }
+        $section_key = sanitize_key((string) ($section_row['section_key'] ?? ''));
+        $section_label = sanitize_text_field((string) ($section_row['label'] ?? ''));
+        if ($section_key === '' || $section_label === '') {
+            continue;
+        }
+        if (!isset($sections_index[$section_key])) {
+            $sections_index[$section_key] = array('key' => $section_key, 'label' => $section_label, 'field_keys' => array());
+            $section_order[] = $section_key;
+        }
+    }
+
+    if (empty($sections_index)) {
+        $sections_index['main_section'] = array('key' => 'main_section', 'label' => 'Main Section', 'field_keys' => array());
+        $section_order[] = 'main_section';
+    }
 
     foreach ($candidates as $candidate) {
         if (!is_array($candidate)) {
@@ -1510,10 +2021,12 @@ function dcb_upload_stage_draft_schema_generation(array $candidates, string $lab
             'required' => !empty($candidate['required_guess']),
             'ocr_meta' => array(
                 'page_number' => max(1, (int) ($candidate['page_number'] ?? 1)),
+                'line_index' => max(0, (int) ($candidate['line_index'] ?? 0)),
                 'source_text_snippet' => sanitize_text_field((string) ($candidate['source_text_snippet'] ?? '')),
                 'confidence_bucket' => sanitize_key((string) ($candidate['confidence_bucket'] ?? 'low')),
                 'confidence_score' => (float) ($candidate['confidence_score'] ?? 0),
                 'suggested_type' => sanitize_key((string) ($candidate['suggested_type'] ?? 'text')),
+                'detected_type' => sanitize_key((string) ($candidate['detected_type'] ?? ($candidate['suggested_type'] ?? 'text'))),
                 'signal' => sanitize_key((string) ($candidate['signal'] ?? 'heuristic')),
                 'source_engine' => sanitize_key((string) ($candidate['source_engine'] ?? '')),
                 'warning_state' => sanitize_key((string) ($candidate['warning_state'] ?? 'none')),
@@ -1537,10 +2050,68 @@ function dcb_upload_stage_draft_schema_generation(array $candidates, string $lab
         $fields[] = $field;
         $seen[$key] = true;
 
+        $section_hint = sanitize_key((string) ($candidate['section_hint'] ?? 'main_section'));
+        if ($section_hint === '' || !isset($sections_index[$section_hint])) {
+            $section_hint = 'main_section';
+            if (!isset($sections_index[$section_hint])) {
+                $sections_index[$section_hint] = array('key' => $section_hint, 'label' => 'Main Section', 'field_keys' => array());
+                $section_order[] = $section_hint;
+            }
+        }
+        $sections_index[$section_hint]['field_keys'][] = $key;
+
         if (count($fields) >= 50) {
             break;
         }
     }
+
+    $sections = array();
+    foreach ($section_order as $section_key) {
+        if (empty($sections_index[$section_key]['field_keys'])) {
+            continue;
+        }
+        $sections[] = array(
+            'key' => $sections_index[$section_key]['key'],
+            'label' => $sections_index[$section_key]['label'],
+            'field_keys' => array_values(array_unique($sections_index[$section_key]['field_keys'])),
+        );
+    }
+
+    if (empty($sections)) {
+        $sections[] = array('key' => 'main_section', 'label' => 'Main Section', 'field_keys' => array_map(static function ($f) { return (string) ($f['key'] ?? ''); }, $fields));
+    }
+
+    $repeaters = array();
+    $tables = isset($document_model['table_candidates']) && is_array($document_model['table_candidates']) ? $document_model['table_candidates'] : array();
+    if (!empty($tables) && count($fields) >= 3) {
+        $repeater_fields = array();
+        foreach ($fields as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $key = sanitize_key((string) ($field['key'] ?? ''));
+            if ($key === '') {
+                continue;
+            }
+            if (preg_match('/(item|qty|quantity|description|amount|date|time|service|code)/i', (string) ($field['label'] ?? ''))) {
+                $repeater_fields[] = $key;
+            }
+            if (count($repeater_fields) >= 6) {
+                break;
+            }
+        }
+        if (count($repeater_fields) >= 2) {
+            $repeaters[] = array(
+                'key' => 'line_items',
+                'label' => 'Line Items',
+                'field_keys' => array_values(array_unique($repeater_fields)),
+                'min' => 0,
+                'max' => 25,
+            );
+        }
+    }
+
+    $nodes = function_exists('dcb_default_document_nodes') ? dcb_default_document_nodes($template_blocks, $fields) : array();
 
     $page_review = array();
     foreach ($page_meta as $meta) {
@@ -1561,16 +2132,23 @@ function dcb_upload_stage_draft_schema_generation(array $candidates, string $lab
         'label' => sanitize_text_field($label),
         'recipients' => '',
         'version' => 1,
-        'template_blocks' => array(),
+        'template_blocks' => $template_blocks,
+        'document_nodes' => $nodes,
+        'sections' => $sections,
+        'repeaters' => $repeaters,
         'fields' => $fields,
         'hard_stops' => array(),
-        'ocr_candidates' => dcb_normalize_ocr_candidates($candidates),
+        'ocr_candidates' => dcb_ocr_normalize_candidates_runtime($candidates),
         'ocr_review' => array(
             'origin' => 'ocr_import',
             'created_at' => current_time('mysql'),
-            'pipeline_stages' => array('file_type_inspection', 'text_extraction', 'page_rasterization', 'ocr_fallback', 'line_block_normalization', 'field_candidate_extraction', 'draft_schema_generation'),
+            'pipeline_stages' => array('file_type_inspection', 'text_extraction', 'page_rasterization', 'ocr_fallback', 'line_block_normalization', 'document_modeling', 'field_candidate_extraction', 'draft_schema_generation'),
             'page_extraction' => $page_review,
             'field_confidence_counts' => $confidence_counts,
+            'section_count' => count($sections),
+            'repeater_count' => count($repeaters),
+            'template_block_count' => count($template_blocks),
+            'model_version' => sanitize_text_field((string) ($document_model['model_version'] ?? '1.0')),
         ),
     );
 }
@@ -1613,16 +2191,33 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
         );
     }
 
-    $normalized = dcb_upload_stage_line_block_normalization($pages);
-    $candidates = dcb_upload_stage_field_candidate_extraction($normalized, $page_meta);
-    $template_blocks = dcb_upload_stage_template_block_extraction($normalized);
+    $document_model = isset($extraction['ocr_document_model']) && is_array($extraction['ocr_document_model'])
+        ? $extraction['ocr_document_model']
+        : dcb_ocr_build_document_model($pages);
 
-    $draft = dcb_upload_stage_draft_schema_generation($candidates, $label, $page_meta);
-    $draft['template_blocks'] = $template_blocks;
+    $candidates = dcb_upload_stage_field_candidate_extraction($document_model, $page_meta);
+    $template_blocks = dcb_upload_stage_template_block_extraction($document_model);
+
+    $draft = dcb_upload_stage_draft_schema_generation($candidates, $label, $page_meta, $document_model, $template_blocks);
     if (!isset($draft['ocr_review']) || !is_array($draft['ocr_review'])) {
         $draft['ocr_review'] = array();
     }
     $draft['ocr_review']['template_block_count'] = count($template_blocks);
+    $draft['ocr_review']['field_candidate_count'] = count($candidates);
+    $draft['ocr_review']['table_candidate_count'] = isset($document_model['table_candidates']) && is_array($document_model['table_candidates']) ? count($document_model['table_candidates']) : 0;
+    $draft['ocr_review']['signature_candidate_count'] = isset($document_model['signature_date_candidates']) && is_array($document_model['signature_date_candidates']) ? count($document_model['signature_date_candidates']) : 0;
+    $draft['ocr_review']['low_confidence_warning'] = !empty($draft['ocr_review']['field_confidence_counts']['low']) && (int) $draft['ocr_review']['field_confidence_counts']['low'] > ((int) ($draft['ocr_review']['field_candidate_count'] ?? 0) / 2);
+
+    $draft['ocr_document_model'] = array(
+        'model_version' => sanitize_text_field((string) ($document_model['model_version'] ?? '1.0')),
+        'page_count' => isset($document_model['pages']) && is_array($document_model['pages']) ? count($document_model['pages']) : count($pages),
+        'block_count' => isset($document_model['blocks']) && is_array($document_model['blocks']) ? count($document_model['blocks']) : 0,
+        'line_count' => isset($document_model['lines']) && is_array($document_model['lines']) ? count($document_model['lines']) : 0,
+        'anchor_count' => isset($document_model['anchors']) && is_array($document_model['anchors']) ? count($document_model['anchors']) : 0,
+        'section_candidates' => isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? $document_model['section_candidates'] : array(),
+        'table_candidates' => isset($document_model['table_candidates']) && is_array($document_model['table_candidates']) ? $document_model['table_candidates'] : array(),
+        'signature_date_candidates' => isset($document_model['signature_date_candidates']) && is_array($document_model['signature_date_candidates']) ? $document_model['signature_date_candidates'] : array(),
+    );
 
     return $draft;
 }

@@ -1,0 +1,26 @@
+{
+  "id": "clean_form",
+  "label": "Clean Intake Form",
+  "pages": [
+    {
+      "page_number": 1,
+      "engine": "fixture",
+      "confidence_proxy": 0.92,
+      "text": "PATIENT INFORMATION\nPatient Name: __________\nDate of Birth: __________\nEmail Address: __________\nPhone Number: __________\n\nCLINICAL\nPrimary Complaint: __________\nConsent to Treatment [ ] Yes [ ] No\nSignature: __________\nDate: __________"
+    }
+  ],
+  "expected": {
+    "fields": [
+      {"key": "patient_name", "type": "text"},
+      {"key": "date_of_birth", "type": "date"},
+      {"key": "email_address", "type": "email"},
+      {"key": "phone_number", "type": "text"},
+      {"key": "consent_to_treatment", "type": "yes_no"},
+      {"key": "signature", "type": "text"},
+      {"key": "date", "type": "date"}
+    ],
+    "sections": ["patient_information", "clinical"],
+    "min_repeater_count": 0,
+    "max_false_positive": 3
+  }
+}

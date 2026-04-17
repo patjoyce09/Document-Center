@@ -1,0 +1,25 @@
+{
+  "id": "noisy_scan",
+  "label": "Noisy Scan Form",
+  "pages": [
+    {
+      "page_number": 1,
+      "engine": "fixture",
+      "confidence_proxy": 0.58,
+      "text": "PLEASE COMPLETE ALL REQUIRED FIELDS\nSection A - Demographics\nName : _____\nDOB : _____\nE-mail: _____\n\nDO NOT WRITE BELOW THIS LINE\n\nSection B - Insurance\nPolicy Number: ______\nGroup Number: ______\nSubscriber Phone: ______"
+    }
+  ],
+  "expected": {
+    "fields": [
+      {"key": "name", "type": "text"},
+      {"key": "dob", "type": "date"},
+      {"key": "email", "type": "email"},
+      {"key": "policy_number", "type": "number"},
+      {"key": "group_number", "type": "number"},
+      {"key": "subscriber_phone", "type": "text"}
+    ],
+    "sections": ["section_a_demographics", "section_b_insurance"],
+    "min_repeater_count": 0,
+    "max_false_positive": 4
+  }
+}

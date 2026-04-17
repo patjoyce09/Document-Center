@@ -1,0 +1,31 @@
+{
+  "id": "multi_page_form",
+  "label": "Multi Page Packet",
+  "pages": [
+    {
+      "page_number": 1,
+      "engine": "fixture",
+      "confidence_proxy": 0.81,
+      "text": "PATIENT INTAKE\nPatient Name: __________\nAddress: __________\nCity: __________\nState: __________\nZip: __________"
+    },
+    {
+      "page_number": 2,
+      "engine": "fixture",
+      "confidence_proxy": 0.77,
+      "text": "MEDICAL HISTORY\nCurrent Medications: __________\nAllergies: __________\nPast Surgeries: __________\n\nAUTHORIZATION\nConsent to Share Records [ ] Yes [ ] No\nSignature: __________\nDate: __________"
+    }
+  ],
+  "expected": {
+    "fields": [
+      {"key": "patient_name", "type": "text"},
+      {"key": "address", "type": "text"},
+      {"key": "current_medications", "type": "text"},
+      {"key": "allergies", "type": "text"},
+      {"key": "consent_to_share_records", "type": "yes_no"},
+      {"key": "signature", "type": "text"}
+    ],
+    "sections": ["patient_intake", "medical_history", "authorization"],
+    "min_repeater_count": 0,
+    "max_false_positive": 5
+  }
+}

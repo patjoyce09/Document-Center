@@ -1,0 +1,24 @@
+{
+  "id": "signature_heavy",
+  "label": "Signature Form",
+  "pages": [
+    {
+      "page_number": 1,
+      "engine": "fixture",
+      "confidence_proxy": 0.79,
+      "text": "CONSENT STATEMENT\nI acknowledge the above information is true.\nPatient Signature: __________\nPatient Initials: ______\nDate: __________\nWitness Signature: __________\nWitness Date: __________"
+    }
+  ],
+  "expected": {
+    "fields": [
+      {"key": "patient_signature", "type": "text"},
+      {"key": "patient_initials", "type": "text"},
+      {"key": "date", "type": "date"},
+      {"key": "witness_signature", "type": "text"},
+      {"key": "witness_date", "type": "date"}
+    ],
+    "sections": ["consent_statement"],
+    "min_repeater_count": 0,
+    "max_false_positive": 2
+  }
+}

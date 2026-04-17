@@ -102,6 +102,22 @@ Return `null` to allow native guarded fallback, or array shape:
 2. `$payload` (`array`)
 3. `$mapping` (`array`)
 
+### `dcb_ocr_document_model`
+Filter normalized OCR intermediate document model before candidate extraction/draft generation.
+
+**Arguments**
+1. `$model` (`array`)
+2. `$pages` (`array`)
+
+### `dcb_ocr_candidate_enriched`
+Filter enriched OCR field candidate after scoring/type inference and before dedupe.
+
+**Arguments**
+1. `$candidate` (`array`)
+2. `$line_row` (`array`)
+3. `$document_model` (`array`)
+4. `$page_meta` (`array`)
+
 ## Actions
 
 ### `dcb_submission_completed`
@@ -256,3 +272,9 @@ Fires when a training-assignment attempt fails or is skipped.
 1. `$submission_id` (`int`)
 2. `$assignment` (`array`)
 3. `$mapping` (`array`)
+
+### `dcb_ocr_correction_rules_updated`
+Fires when deterministic OCR correction-feedback rules are updated from review actions.
+
+**Arguments**
+1. `$rules` (`array`)

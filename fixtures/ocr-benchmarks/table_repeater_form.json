@@ -1,0 +1,24 @@
+{
+  "id": "table_repeater_form",
+  "label": "Table Repeater Form",
+  "pages": [
+    {
+      "page_number": 1,
+      "engine": "fixture",
+      "confidence_proxy": 0.83,
+      "text": "MEDICATION LIST\nItem   Qty   Description   Date\n_____  ___   ___________   ______\n_____  ___   ___________   ______\n_____  ___   ___________   ______\n\nPrescribing Physician: __________"
+    }
+  ],
+  "expected": {
+    "fields": [
+      {"key": "item", "type": "text"},
+      {"key": "qty", "type": "number"},
+      {"key": "description", "type": "text"},
+      {"key": "date", "type": "date"},
+      {"key": "prescribing_physician", "type": "text"}
+    ],
+    "sections": ["medication_list"],
+    "min_repeater_count": 1,
+    "max_false_positive": 4
+  }
+}

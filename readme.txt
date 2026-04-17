@@ -4,7 +4,7 @@ Tags: forms, ocr, uploader, diagnostics
 Requires at least: 6.4
 Tested up to: 6.7
 Requires PHP: 8.0
-Stable tag: 0.3.0
+Stable tag: 0.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,18 @@ Role capability grants are filterable via dcb_permissions_role_caps.
 - [dcb_upload_portal]
 
 == Changelog ==
+= 0.3.1 =
+* Added stronger OCR intermediate document model (pages, blocks, lines, anchors, section candidates, table/repeater hints, signature/date candidates) before draft generation.
+* Improved OCR label-to-input understanding for colon labels, trailing blanks/underscores, checkbox markers, yes/no pairs, and signature/date cues.
+* Expanded field type inference signals (text, textarea, select, checkbox, yes/no, date, time, phone, email, number, DOB, signature, initials) with safe builder-compatible mapping.
+* Added structural OCR heuristics for section detection, grouped field context, and table/repeater hints to improve generated draft quality.
+* Added stronger candidate scoring/ranking metadata and confidence reasoning to reduce instructional/heading false positives.
+* Added deterministic correction-feedback reuse (`dcb_ocr_correction_rules`) for label aliases and type overrides based on human review corrections.
+* Improved OCR-to-builder draft generation with better ordering, section assignment, repeater hints, template blocks, and default document nodes.
+* Enriched OCR extraction payloads with quality model metadata/candidates while preserving backward compatibility.
+* Added OCR benchmark fixtures covering clean/noisy/multi-page/checkbox-heavy/signature-heavy/table forms.
+* Added OCR quality benchmark smoke test with precision/recall/type/section/repeater metrics and CI coverage.
+
 = 0.3.0 =
 * Productized Tutor LMS integration as an optional, isolated module with strict guardrails when Tutor is not installed.
 * Replaced Tutor mapping JSON-only management with a structured settings UI for form-to-course/lesson/quiz mapping.

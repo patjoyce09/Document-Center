@@ -436,8 +436,11 @@ function dcb_normalize_ocr_candidates($candidates): array {
             'field_label' => sanitize_text_field((string) ($candidate['field_label'] ?? '')),
             'suggested_key' => sanitize_key((string) ($candidate['suggested_key'] ?? '')),
             'suggested_type' => sanitize_key((string) ($candidate['suggested_type'] ?? 'text')),
+            'detected_type' => sanitize_key((string) ($candidate['detected_type'] ?? '')),
             'required_guess' => !empty($candidate['required_guess']),
             'page_number' => max(1, (int) ($candidate['page_number'] ?? 1)),
+            'line_index' => max(0, (int) ($candidate['line_index'] ?? 0)),
+            'section_hint' => sanitize_key((string) ($candidate['section_hint'] ?? '')),
             'source_text_snippet' => sanitize_text_field((string) ($candidate['source_text_snippet'] ?? '')),
             'confidence_bucket' => sanitize_key((string) ($candidate['confidence_bucket'] ?? 'low')),
             'confidence_score' => isset($candidate['confidence_score']) && is_numeric($candidate['confidence_score']) ? round(max(0, min(1, (float) $candidate['confidence_score'])), 4) : 0,
@@ -450,6 +453,19 @@ function dcb_normalize_ocr_candidates($candidates): array {
         }
         if (!in_array($row['confidence_bucket'], array('low', 'medium', 'high'), true)) {
             $row['confidence_bucket'] = 'low';
+        }
+        if ($row['detected_type'] === '') {
+            unset($row['detected_type']);
+        }
+        if ($row['section_hint'] === '') {
+            unset($row['section_hint']);
+        }
+
+        if (isset($candidate['confidence_reasons']) && is_array($candidate['confidence_reasons'])) {
+            $reasons = array_values(array_filter(array_map('sanitize_key', $candidate['confidence_reasons'])));
+            if (!empty($reasons)) {
+                $row['confidence_reasons'] = $reasons;
+            }
         }
 
         $out[] = $row;
@@ -490,6 +506,17 @@ function dcb_normalize_ocr_review($review): array {
 
     if (isset($review['template_block_count']) && is_numeric($review['template_block_count'])) {
         $out['template_block_count'] = max(0, (int) $review['template_block_count']);
+    }
+    foreach (array('section_count', 'repeater_count', 'field_candidate_count', 'table_candidate_count', 'signature_candidate_count') as $count_key) {
+        if (isset($review[$count_key]) && is_numeric($review[$count_key])) {
+            $out[$count_key] = max(0, (int) $review[$count_key]);
+        }
+    }
+    if (isset($review['model_version'])) {
+        $out['model_version'] = sanitize_text_field((string) $review['model_version']);
+    }
+    if (isset($review['low_confidence_warning'])) {
+        $out['low_confidence_warning'] = !empty($review['low_confidence_warning']);
     }
 
     if (isset($review['page_extraction']) && is_array($review['page_extraction'])) {
