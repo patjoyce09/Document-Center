@@ -224,7 +224,7 @@ final class DCB_OCR {
         }
 
         $id = (int) $post->ID;
-        $make_url = static function (string $task): string use ($id) {
+        $make_url = static function (string $task) use ($id): string {
             $base = admin_url('admin-post.php?action=dcb_ocr_review_action&review_id=' . $id . '&task=' . sanitize_key($task));
             return wp_nonce_url($base, 'dcb_ocr_review_action_' . $id, 'dcb_ocr_review_nonce');
         };
