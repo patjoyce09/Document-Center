@@ -58,8 +58,9 @@ $normalization_photo = array(
 
 $routing_photo = dcb_ocr_build_page_quality_routing($inspection_photo, $text_stage_photo, $normalization_photo, array(), 'photo');
 assert_true((string) ($routing_photo['source_type'] ?? '') === 'phone_photo', 'photo source should classify as phone_photo');
-assert_true((string) ($routing_photo['routing_decision'] ?? '') === 'review_recommended', 'high risk photo should route to review_recommended');
+assert_true(in_array((string) ($routing_photo['routing_decision'] ?? ''), array('review_recommended', 'low_quality_review_recommended'), true), 'high risk photo should route to quality review');
 assert_true(!empty($routing_photo['review_recommended']), 'review_recommended flag should be true');
+assert_true(in_array('review_recommended', (array) ($routing_photo['routing_decisions'] ?? array()), true), 'routing decisions should retain review alias');
 
 $inspection_pdf = array('kind' => 'pdf', 'is_pdf' => true, 'is_image' => false);
 $text_stage_pdf = array(
@@ -73,5 +74,6 @@ $routing_pdf = dcb_ocr_build_page_quality_routing($inspection_pdf, $text_stage_p
 assert_true(!empty($native_pass['native_text_available']), 'native pdf pass should detect native text');
 assert_true((int) ($native_pass['widget_count'] ?? 0) >= 2, 'native pdf pass should detect widget evidence');
 assert_true((string) ($routing_pdf['routing_decision'] ?? '') === 'native_pdf_first_pass', 'native pdf should prefer native_pdf_first_pass route');
+assert_true(isset($routing_pdf['routing_decisions']) && in_array('native_pdf_first_pass', (array) $routing_pdf['routing_decisions'], true), 'routing decisions should include native pdf first pass');
 
 echo "ocr_page_quality_routing_smoke:ok\n";

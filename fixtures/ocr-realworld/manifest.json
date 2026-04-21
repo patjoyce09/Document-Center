@@ -94,6 +94,24 @@
         "min_repeater_count": 1,
         "max_false_positive": 8
       }
+    },
+    {
+      "case_id": "sparse_notice_form",
+      "label": "Sparse Notice Form",
+      "source_type": "pdf",
+      "sample_path": "fixtures/ocr-realworld/notice_sparse_sample.txt",
+      "optional_binary_path": "fixtures/ocr-realworld/local/sparse_notice_form.pdf",
+      "required_local_binary": false,
+      "expected": {
+        "fields": [
+          { "key": "applicant_signature", "type": "text" },
+          { "key": "date", "type": "date" },
+          { "key": "printed_name", "type": "text" }
+        ],
+        "sections": ["notice_to_applicant"],
+        "min_repeater_count": 0,
+        "max_false_positive": 4
+      }
     }
   ]
 }

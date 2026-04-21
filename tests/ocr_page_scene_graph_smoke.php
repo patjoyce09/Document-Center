@@ -59,6 +59,7 @@ $page_meta = array(
 $widgets = dcb_ocr_detect_field_widgets($document_model, $page_meta, array());
 $page_graph = dcb_ocr_build_page_relation_graph($document_model, $widgets);
 $scene_graph = dcb_ocr_build_scene_graph($document_model, $widgets, $page_graph, $page_meta);
+$canonical_graph = dcb_ocr_build_canonical_form_graph($document_model, $widgets, $page_graph, $scene_graph, $page_meta, array());
 
 assert_true(isset($page_graph['nodes']) && is_array($page_graph['nodes']) && count($page_graph['nodes']) > 0, 'page graph should contain nodes');
 assert_true(isset($page_graph['edges']) && is_array($page_graph['edges']) && count($page_graph['edges']) > 0, 'page graph should contain edges');
@@ -72,6 +73,10 @@ foreach ($page_graph['edges'] as $edge) {
 }
 assert_true(in_array('nearest_label', $edge_relations, true), 'page graph should link widgets to nearest labels');
 assert_true(in_array('signature_date_pair', $edge_relations, true), 'page graph should include signature/date pairing');
+assert_true(in_array('label_of', $edge_relations, true), 'page graph should include label_of relation');
+assert_true(in_array('belongs_to_group', $edge_relations, true), 'page graph should include belongs_to_group relation');
+assert_true(in_array('section_contains', $edge_relations, true), 'page graph should include section_contains relation');
+assert_true(in_array('paired_signature_date', $edge_relations, true), 'page graph should include paired_signature_date relation');
 
 assert_true(isset($scene_graph['pages']) && is_array($scene_graph['pages']) && count($scene_graph['pages']) === 2, 'scene graph should contain both pages');
 
@@ -87,5 +92,8 @@ foreach ($scene_graph['pages'] as $page) {
 
 assert_true($grouped_control_count >= 1, 'scene graph should contain grouped controls');
 assert_true($approval_block_count >= 1, 'scene graph should contain approval/signature blocks');
+assert_true(isset($canonical_graph['graph_kind']) && (string) $canonical_graph['graph_kind'] === 'canonical_form_graph', 'canonical graph should expose canonical form graph kind');
+assert_true(isset($canonical_graph['pages']) && is_array($canonical_graph['pages']) && count($canonical_graph['pages']) === 2, 'canonical graph should preserve page count');
+assert_true(isset($canonical_graph['relations']) && is_array($canonical_graph['relations']) && count($canonical_graph['relations']) > 0, 'canonical graph should include relations');
 
 echo "ocr_page_scene_graph_smoke:ok\n";

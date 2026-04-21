@@ -378,15 +378,42 @@ function dcb_ocr_classify_source_for_routing(array $inspection, string $source_t
     return $kind !== '' ? $kind : 'other';
 }
 
+function dcb_ocr_source_profile(array $inspection, string $source_type, array $text_stage = array(), array $native_pdf_pass = array()): string {
+    $source_class = dcb_ocr_classify_source_for_routing($inspection, $source_type, $text_stage);
+    if ($source_class === 'native_pdf') {
+        return 'digital_pdf_native';
+    }
+    if ($source_class === 'scanned_pdf') {
+        return 'raster_pdf_scanned';
+    }
+    if ($source_class === 'phone_photo') {
+        return 'phone_photo_capture';
+    }
+
+    if (!empty($inspection['is_pdf']) && !empty($native_pdf_pass['native_text_available'])) {
+        return 'digital_pdf_native';
+    }
+    if (!empty($inspection['is_pdf'])) {
+        return 'raster_pdf_scanned';
+    }
+    return $source_class;
+}
+
 function dcb_ocr_native_pdf_first_pass(string $file_path, array $inspection, array $text_stage): array {
     $out = array(
         'enabled' => !empty($inspection['is_pdf']),
         'source_classification' => 'other',
+        'source_profile' => 'other',
+        'first_pass_mode' => 'disabled',
         'native_text_available' => false,
         'native_text_char_count' => 0,
         'native_text_page_coverage' => 0.0,
+        'native_widget_probe_supported' => false,
+        'interactive_widget_candidates' => array(),
+        'interactive_widget_count' => 0,
         'widget_candidates' => array(),
         'widget_count' => 0,
+        'mixed_content_raster_fallback_recommended' => false,
         'evidence_confidence_proxy' => 0.0,
     );
 
@@ -398,6 +425,8 @@ function dcb_ocr_native_pdf_first_pass(string $file_path, array $inspection, arr
     $combined = sanitize_textarea_field((string) ($text_stage['text'] ?? ''));
     $weak = dcb_upload_stage_pdf_text_is_weak($pages, $combined);
     $out['source_classification'] = $weak ? 'scanned_pdf' : 'native_pdf';
+    $out['source_profile'] = $weak ? 'raster_pdf_scanned' : 'digital_pdf_native';
+    $out['first_pass_mode'] = $weak ? 'raster_fallback_only' : 'native_text_evidence';
     $out['native_text_available'] = !$weak && $combined !== '';
     $out['native_text_char_count'] = strlen($combined);
 
@@ -415,6 +444,7 @@ function dcb_ocr_native_pdf_first_pass(string $file_path, array $inspection, arr
     $out['native_text_page_coverage'] = round($non_empty / $page_total, 4);
 
     $widget_candidates = array();
+    $interactive_widget_candidates = array();
     foreach ($pages as $page) {
         if (!is_array($page)) {
             continue;
@@ -445,29 +475,125 @@ function dcb_ocr_native_pdf_first_pass(string $file_path, array $inspection, arr
                 continue;
             }
 
+            $line_ratio = round(max(0.0, min(1.0, ((int) $line_index + 1) / max(1, count($lines)))), 4);
+            $geometry = dcb_ocr_widget_geometry_hint(array(
+                'region_hint' => 'left',
+                'line_position_ratio' => $line_ratio,
+            ), $widget_type);
+
             $widget_candidates[] = array(
                 'widget_id' => 'native_pdf_widget_' . (count($widget_candidates) + 1),
                 'widget_type' => $widget_type,
                 'page_number' => $page_number,
                 'line_index' => max(0, (int) $line_index),
                 'label_text' => sanitize_text_field(mb_substr($line, 0, 120)),
+                'geometry' => $geometry,
+                'provenance' => array('source' => 'native_text_pattern', 'file_name' => sanitize_text_field((string) basename($file_path))),
                 'confidence_score' => 0.62,
                 'confidence_bucket' => 'medium',
                 'source' => 'native_pdf_first_pass',
             );
+
+            if (preg_match('/\[(?:\s|x|X)?\]|☐|☑|\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line)) {
+                $interactive_widget_candidates[] = array(
+                    'widget_id' => 'native_pdf_interactive_' . (count($interactive_widget_candidates) + 1),
+                    'widget_type' => in_array($widget_type, array('checkbox', 'yes_no_group'), true) ? $widget_type : 'interactive_candidate',
+                    'page_number' => $page_number,
+                    'line_index' => max(0, (int) $line_index),
+                    'label_text' => sanitize_text_field(mb_substr($line, 0, 120)),
+                    'confidence_score' => 0.67,
+                    'source' => 'native_pdf_first_pass',
+                );
+            }
         }
     }
 
     $out['widget_candidates'] = $widget_candidates;
     $out['widget_count'] = count($widget_candidates);
+    $out['interactive_widget_candidates'] = $interactive_widget_candidates;
+    $out['interactive_widget_count'] = count($interactive_widget_candidates);
+    $out['mixed_content_raster_fallback_recommended'] = $weak || (!$out['native_text_available'] || $out['native_text_page_coverage'] < 0.60);
 
     $base_conf = $out['native_text_available'] ? 0.72 : 0.44;
     if ($out['widget_count'] > 0) {
         $base_conf += 0.08;
     }
+    if ($out['interactive_widget_count'] > 0) {
+        $base_conf += 0.04;
+    }
     $out['evidence_confidence_proxy'] = round(max(0.0, min(1.0, $base_conf)), 4);
 
     return $out;
+}
+
+function dcb_ocr_build_source_triage(array $inspection, string $file_path, array $text_stage, array $normalization = array(), array $native_pdf_pass = array(), array $page_quality_routing = array()): array {
+    $source_type = dcb_upload_ocr_detect_source_type($inspection, $file_path);
+    $source_profile = dcb_ocr_source_profile($inspection, $source_type, $text_stage, $native_pdf_pass);
+    $warnings = isset($normalization['warnings']) && is_array($normalization['warnings']) ? $normalization['warnings'] : array();
+    $routing_decision = sanitize_key((string) ($page_quality_routing['routing_decision'] ?? 'standard_ocr_path'));
+
+    $decisions = array();
+    if ($source_profile === 'digital_pdf_native') {
+        $decisions[] = 'native_pdf_first_pass';
+    }
+    if ($source_profile === 'raster_pdf_scanned') {
+        $decisions[] = 'raster_ocr_path';
+    }
+    if ($source_profile === 'phone_photo_capture') {
+        $decisions[] = 'phone_photo_heavy_normalization';
+    }
+    if ($routing_decision === 'review_recommended' || $routing_decision === 'low_quality_review_recommended') {
+        $decisions[] = 'low_quality_review_recommended';
+    }
+
+    $native_text_char_count = max(0, (int) ($native_pdf_pass['native_text_char_count'] ?? 0));
+    $widget_evidence_count = max(0, (int) ($native_pdf_pass['widget_count'] ?? 0));
+    $interactive_widget_count = max(0, (int) ($native_pdf_pass['interactive_widget_count'] ?? 0));
+    $capture_warning_count = count($warnings);
+
+    if (empty($decisions)) {
+        $decisions[] = 'raster_ocr_path';
+    }
+
+    $confidence = 0.44;
+    if ($source_profile === 'digital_pdf_native') {
+        $confidence += 0.24;
+    }
+    if ($native_text_char_count >= 120) {
+        $confidence += 0.12;
+    }
+    if ($widget_evidence_count > 0) {
+        $confidence += 0.08;
+    }
+    if ($interactive_widget_count > 0) {
+        $confidence += 0.04;
+    }
+    if ($capture_warning_count >= 2) {
+        $confidence -= 0.10;
+    }
+
+    return array(
+        'triage_version' => '1.0',
+        'input_source_type' => $source_type,
+        'source_profile' => $source_profile,
+        'decisions' => array_values(array_unique(array_filter(array_map('sanitize_key', $decisions)))),
+        'routing_decision' => $routing_decision,
+        'confidence_proxy' => round(max(0.0, min(1.0, $confidence)), 4),
+        'signals' => array(
+            'native_text_char_count' => $native_text_char_count,
+            'native_text_page_coverage' => round(max(0.0, min(1.0, (float) ($native_pdf_pass['native_text_page_coverage'] ?? 0.0))), 4),
+            'widget_evidence_count' => $widget_evidence_count,
+            'interactive_widget_count' => $interactive_widget_count,
+            'capture_warning_count' => $capture_warning_count,
+            'mixed_content_raster_fallback_recommended' => !empty($native_pdf_pass['mixed_content_raster_fallback_recommended']),
+        ),
+        'routing_flags' => array(
+            'native_pdf_first_pass' => in_array('native_pdf_first_pass', $decisions, true),
+            'raster_ocr_path' => in_array('raster_ocr_path', $decisions, true),
+            'phone_photo_heavy_normalization' => in_array('phone_photo_heavy_normalization', $decisions, true),
+            'low_quality_review_recommended' => in_array('low_quality_review_recommended', $decisions, true),
+        ),
+    );
 }
 
 function dcb_ocr_build_page_quality_routing(array $inspection, array $text_stage, array $normalization, array $native_pdf_pass = array(), string $source_type = ''): array {
@@ -487,7 +613,7 @@ function dcb_ocr_build_page_quality_routing(array $inspection, array $text_stage
             }
             $page_routes[] = array(
                 'page_number' => max(1, (int) ($row['page_number'] ?? ($idx + 1))),
-                'route' => $source_class === 'native_pdf' ? 'native_pdf_first_pass' : 'standard_ocr_path',
+                'route' => $source_class === 'native_pdf' ? 'native_pdf_first_pass' : ($source_class === 'scanned_pdf' ? 'raster_ocr_path' : 'standard_ocr_path'),
                 'quality_bucket' => 'unknown',
                 'risk_score' => 0.0,
                 'warning_count' => 0,
@@ -539,11 +665,13 @@ function dcb_ocr_build_page_quality_routing(array $inspection, array $text_stage
         $route = 'standard_ocr_path';
         if ($source_class === 'native_pdf' && !empty($native_pdf_pass['native_text_available'])) {
             $route = 'native_pdf_first_pass';
+        } elseif ($source_class === 'scanned_pdf') {
+            $route = 'raster_ocr_path';
         } elseif ($source_class === 'phone_photo' && ($risk_score >= 0.34 || count($warnings) >= 2)) {
             $route = 'phone_photo_heavy_normalization';
         }
         if ($risk_score >= 0.56 || count($warnings) >= 3) {
-            $route = 'review_recommended';
+            $route = 'low_quality_review_recommended';
         }
 
         $page_routes[] = array(
@@ -563,12 +691,16 @@ function dcb_ocr_build_page_quality_routing(array $inspection, array $text_stage
             continue;
         }
         $route = sanitize_key((string) ($row['route'] ?? 'standard_ocr_path'));
-        if ($route === 'review_recommended') {
-            $overall_route = 'review_recommended';
+        if ($route === 'low_quality_review_recommended') {
+            $overall_route = 'low_quality_review_recommended';
             break;
         }
         if ($route === 'phone_photo_heavy_normalization') {
             $overall_route = 'phone_photo_heavy_normalization';
+            continue;
+        }
+        if ($route === 'raster_ocr_path' && $overall_route === 'standard_ocr_path') {
+            $overall_route = 'raster_ocr_path';
             continue;
         }
         if ($route === 'native_pdf_first_pass' && $overall_route === 'standard_ocr_path') {
@@ -576,11 +708,18 @@ function dcb_ocr_build_page_quality_routing(array $inspection, array $text_stage
         }
     }
 
+    $routing_decisions = array($overall_route);
+    if ($overall_route === 'low_quality_review_recommended') {
+        $routing_decisions[] = 'review_recommended';
+    }
+
     return array(
-        'route_version' => '1.0',
+        'route_version' => '1.1',
         'source_type' => $source_class,
         'routing_decision' => $overall_route,
-        'review_recommended' => $overall_route === 'review_recommended',
+        'legacy_routing_decision' => $overall_route === 'low_quality_review_recommended' ? 'review_recommended' : $overall_route,
+        'routing_decisions' => array_values(array_unique(array_filter(array_map('sanitize_key', $routing_decisions)))),
+        'review_recommended' => $overall_route === 'low_quality_review_recommended' || $overall_route === 'review_recommended',
         'page_routes' => $page_routes,
     );
 }
@@ -1521,6 +1660,7 @@ function dcb_upload_extract_text_from_file_local(string $file_path, string $mime
 
     $pages = dcb_upload_stage_merge_pages($pages, $ocr_pages);
     $page_quality_routing = dcb_ocr_build_page_quality_routing($inspection, $text_stage, $normalization, $native_pdf_pass, $source_type);
+    $source_triage = dcb_ocr_build_source_triage($inspection, $file_path, $text_stage, $normalization, $native_pdf_pass, $page_quality_routing);
     dcb_upload_stage_cleanup_raster_pages($rasterized);
     dcb_upload_stage_cleanup_normalized_images($normalization);
 
@@ -1592,9 +1732,10 @@ function dcb_upload_extract_text_from_file_local(string $file_path, string $mime
         'engine' => $engine,
         'pages' => $page_meta,
         'warnings' => $warnings,
-        'stages' => array('file_type_inspection', 'native_pdf_first_pass', 'page_quality_routing', 'text_extraction', 'page_rasterization', 'input_normalization', 'ocr_fallback'),
+        'stages' => array('file_type_inspection', 'native_pdf_first_pass', 'source_triage', 'page_quality_routing', 'text_extraction', 'page_rasterization', 'input_normalization', 'ocr_fallback'),
         'input_source_type' => $source_type,
         'source_classification' => $source_classification,
+        'source_triage' => $source_triage,
         'native_pdf_first_pass' => $native_pdf_pass,
         'page_quality_routing' => $page_quality_routing,
         'input_normalization' => array(
@@ -1863,18 +2004,52 @@ function dcb_ocr_normalize_result_shape(array $result, string $provider = ''): a
     if (isset($result['source_classification'])) {
         $normalized['source_classification'] = sanitize_key((string) $result['source_classification']);
     }
+    if (isset($result['source_triage']) && is_array($result['source_triage'])) {
+        $triage = (array) $result['source_triage'];
+        $signals = isset($triage['signals']) && is_array($triage['signals']) ? $triage['signals'] : array();
+        $flags = isset($triage['routing_flags']) && is_array($triage['routing_flags']) ? $triage['routing_flags'] : array();
+        $normalized['source_triage'] = array(
+            'triage_version' => sanitize_text_field((string) ($triage['triage_version'] ?? '1.0')),
+            'input_source_type' => sanitize_key((string) ($triage['input_source_type'] ?? 'unknown')),
+            'source_profile' => sanitize_key((string) ($triage['source_profile'] ?? 'other')),
+            'decisions' => isset($triage['decisions']) && is_array($triage['decisions']) ? array_values(array_filter(array_map('sanitize_key', $triage['decisions']))) : array(),
+            'routing_decision' => sanitize_key((string) ($triage['routing_decision'] ?? 'standard_ocr_path')),
+            'confidence_proxy' => round(max(0.0, min(1.0, (float) ($triage['confidence_proxy'] ?? 0.0))), 4),
+            'signals' => array(
+                'native_text_char_count' => max(0, (int) ($signals['native_text_char_count'] ?? 0)),
+                'native_text_page_coverage' => round(max(0.0, min(1.0, (float) ($signals['native_text_page_coverage'] ?? 0.0))), 4),
+                'widget_evidence_count' => max(0, (int) ($signals['widget_evidence_count'] ?? 0)),
+                'interactive_widget_count' => max(0, (int) ($signals['interactive_widget_count'] ?? 0)),
+                'capture_warning_count' => max(0, (int) ($signals['capture_warning_count'] ?? 0)),
+                'mixed_content_raster_fallback_recommended' => !empty($signals['mixed_content_raster_fallback_recommended']),
+            ),
+            'routing_flags' => array(
+                'native_pdf_first_pass' => !empty($flags['native_pdf_first_pass']),
+                'raster_ocr_path' => !empty($flags['raster_ocr_path']),
+                'phone_photo_heavy_normalization' => !empty($flags['phone_photo_heavy_normalization']),
+                'low_quality_review_recommended' => !empty($flags['low_quality_review_recommended']),
+            ),
+        );
+    }
     if (isset($result['native_pdf_first_pass']) && is_array($result['native_pdf_first_pass'])) {
         $native = (array) $result['native_pdf_first_pass'];
         $widget_rows = isset($native['widget_candidates']) && is_array($native['widget_candidates']) ? $native['widget_candidates'] : array();
+        $interactive_rows = isset($native['interactive_widget_candidates']) && is_array($native['interactive_widget_candidates']) ? $native['interactive_widget_candidates'] : array();
         $normalized['native_pdf_first_pass'] = array(
             'enabled' => !empty($native['enabled']),
             'source_classification' => sanitize_key((string) ($native['source_classification'] ?? 'other')),
+            'source_profile' => sanitize_key((string) ($native['source_profile'] ?? 'other')),
+            'first_pass_mode' => sanitize_key((string) ($native['first_pass_mode'] ?? 'disabled')),
             'native_text_available' => !empty($native['native_text_available']),
             'native_text_char_count' => max(0, (int) ($native['native_text_char_count'] ?? 0)),
             'native_text_page_coverage' => round(max(0.0, min(1.0, (float) ($native['native_text_page_coverage'] ?? 0.0))), 4),
+            'native_widget_probe_supported' => !empty($native['native_widget_probe_supported']),
             'widget_count' => max(0, (int) ($native['widget_count'] ?? count($widget_rows))),
+            'interactive_widget_count' => max(0, (int) ($native['interactive_widget_count'] ?? count($interactive_rows))),
+            'mixed_content_raster_fallback_recommended' => !empty($native['mixed_content_raster_fallback_recommended']),
             'evidence_confidence_proxy' => round(max(0.0, min(1.0, (float) ($native['evidence_confidence_proxy'] ?? 0.0))), 4),
             'widget_candidates' => array_values($widget_rows),
+            'interactive_widget_candidates' => array_values($interactive_rows),
         );
     }
     if (isset($result['page_quality_routing']) && is_array($result['page_quality_routing'])) {
@@ -1896,9 +2071,11 @@ function dcb_ocr_normalize_result_shape(array $result, string $provider = ''): a
             );
         }
         $normalized['page_quality_routing'] = array(
-            'route_version' => sanitize_text_field((string) ($routing['route_version'] ?? '1.0')),
+            'route_version' => sanitize_text_field((string) ($routing['route_version'] ?? '1.1')),
             'source_type' => sanitize_key((string) ($routing['source_type'] ?? 'unknown')),
             'routing_decision' => sanitize_key((string) ($routing['routing_decision'] ?? 'standard_ocr_path')),
+            'legacy_routing_decision' => sanitize_key((string) ($routing['legacy_routing_decision'] ?? 'standard_ocr_path')),
+            'routing_decisions' => isset($routing['routing_decisions']) && is_array($routing['routing_decisions']) ? array_values(array_filter(array_map('sanitize_key', $routing['routing_decisions']))) : array(),
             'review_recommended' => !empty($routing['review_recommended']),
             'page_routes' => $normalized_rows,
         );
@@ -2050,6 +2227,8 @@ function dcb_ocr_enrich_extraction_result(array $result): array {
     $widget_candidates = dcb_ocr_detect_field_widgets($document_model, $page_meta, $native_pdf_pass);
     $page_graph = dcb_ocr_build_page_relation_graph($document_model, $widget_candidates);
     $scene_graph = dcb_ocr_build_scene_graph($document_model, $widget_candidates, $page_graph, $page_meta);
+    $source_triage = isset($result['source_triage']) && is_array($result['source_triage']) ? $result['source_triage'] : array();
+    $canonical_graph = dcb_ocr_build_canonical_form_graph($document_model, $widget_candidates, $page_graph, $scene_graph, $page_meta, $source_triage);
 
     $candidates = dcb_upload_stage_field_candidate_extraction($document_model, $page_meta, $widget_candidates);
     $template_blocks = dcb_upload_stage_template_block_extraction($document_model);
@@ -2058,6 +2237,7 @@ function dcb_ocr_enrich_extraction_result(array $result): array {
     $result['ocr_widget_candidates'] = $widget_candidates;
     $result['ocr_page_graph'] = $page_graph;
     $result['ocr_scene_graph'] = $scene_graph;
+    $result['ocr_canonical_form_graph'] = $canonical_graph;
     $result['ocr_candidates'] = dcb_ocr_normalize_candidates_runtime($candidates);
     $result['template_blocks'] = $template_blocks;
     $result['quality_metrics'] = array(
@@ -2066,6 +2246,8 @@ function dcb_ocr_enrich_extraction_result(array $result): array {
         'page_graph_node_count' => isset($page_graph['nodes']) && is_array($page_graph['nodes']) ? count($page_graph['nodes']) : 0,
         'page_graph_edge_count' => isset($page_graph['edges']) && is_array($page_graph['edges']) ? count($page_graph['edges']) : 0,
         'scene_page_count' => isset($scene_graph['pages']) && is_array($scene_graph['pages']) ? count($scene_graph['pages']) : 0,
+        'canonical_page_count' => isset($canonical_graph['pages']) && is_array($canonical_graph['pages']) ? count($canonical_graph['pages']) : 0,
+        'canonical_relation_count' => isset($canonical_graph['relations']) && is_array($canonical_graph['relations']) ? count($canonical_graph['relations']) : 0,
         'section_candidate_count' => isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? count($document_model['section_candidates']) : 0,
         'table_candidate_count' => isset($document_model['table_candidates']) && is_array($document_model['table_candidates']) ? count($document_model['table_candidates']) : 0,
         'signature_candidate_count' => isset($document_model['signature_date_candidates']) && is_array($document_model['signature_date_candidates']) ? count($document_model['signature_date_candidates']) : 0,
@@ -2086,6 +2268,7 @@ function dcb_ocr_enrich_extraction_result(array $result): array {
         'rasterization_coverage' => isset($result['input_normalization']['rasterization_coverage']) ? round(max(0.0, min(1.0, (float) $result['input_normalization']['rasterization_coverage'])), 4) : 0.0,
         'routing_decision' => sanitize_key((string) ($result['page_quality_routing']['routing_decision'] ?? 'standard_ocr_path')),
         'review_route_recommended' => !empty($result['page_quality_routing']['review_recommended']),
+        'source_profile' => sanitize_key((string) ($source_triage['source_profile'] ?? 'unknown')),
     );
 
     return $result;
@@ -2236,6 +2419,7 @@ function dcb_ocr_extract_capture_meta(array $result): array {
     return array(
         'input_source_type' => $source,
         'source_classification' => sanitize_key((string) ($result['source_classification'] ?? $source)),
+        'source_profile' => sanitize_key((string) ($result['source_triage']['source_profile'] ?? '')),
         'capture_warning_count' => count($warnings),
         'normalization_improvement_proxy' => isset($result['input_normalization']['normalization_improvement_proxy'])
             ? round(max(0.0, min(1.0, (float) $result['input_normalization']['normalization_improvement_proxy'])), 4)
@@ -2243,6 +2427,9 @@ function dcb_ocr_extract_capture_meta(array $result): array {
         'capture_recommendations' => array_values(array_unique($clean_recommendations)),
         'capture_risk_bucket' => dcb_ocr_capture_risk_bucket(count($warnings)),
         'routing_decision' => sanitize_key((string) ($result['page_quality_routing']['routing_decision'] ?? 'standard_ocr_path')),
+        'triage_decisions' => isset($result['source_triage']['decisions']) && is_array($result['source_triage']['decisions'])
+            ? array_values(array_filter(array_map('sanitize_key', $result['source_triage']['decisions'])))
+            : array(),
         'review_recommended' => !empty($result['page_quality_routing']['review_recommended']),
     );
 }
@@ -2603,6 +2790,103 @@ function dcb_ocr_is_instructional_line(string $line): bool {
     return (bool) preg_match('/\b(please|instructions?|complete all|attach|submit|for office use|do not write|read carefully|return this form)\b/', $line);
 }
 
+function dcb_ocr_line_prose_density(string $line): float {
+    $line = trim((string) $line);
+    if ($line === '') {
+        return 0.0;
+    }
+    $words = preg_split('/\s+/', $line) ?: array();
+    $word_count = count(array_filter($words, static function ($v) {
+        return trim((string) $v) !== '';
+    }));
+    $punct = (int) preg_match_all('/[,;:\.]/', $line);
+    $anchor_like = (bool) preg_match('/_{3,}|\.{3,}|-{3,}|\[[ xX]?\]|☐|☑|\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line);
+
+    $density = 0.0;
+    $density += min(1.0, $word_count / 36.0) * 0.70;
+    $density += min(1.0, $punct / 10.0) * 0.30;
+    if ($anchor_like) {
+        $density -= 0.35;
+    }
+
+    return round(max(0.0, min(1.0, $density)), 4);
+}
+
+function dcb_ocr_classify_line_role(string $line): string {
+    $line = trim((string) $line);
+    if ($line === '') {
+        return 'empty';
+    }
+    if (dcb_ocr_is_probable_heading($line)) {
+        return 'heading';
+    }
+    if (dcb_ocr_is_instructional_line($line)) {
+        return 'instruction';
+    }
+    if (preg_match('/\b(item|qty|quantity|description|amount|units?|rate|code)\b/i', $line) && preg_match('/\s{2,}|\|/', $line)) {
+        return 'table_header';
+    }
+    if (preg_match('/\b(signature|sign here|initials|date)\b/i', $line)) {
+        return 'approval_cue';
+    }
+    if (preg_match('/_{3,}|\.{3,}|-{3,}|\[[ xX]?\]|☐|☑|\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line)) {
+        return 'field_label';
+    }
+    if (dcb_ocr_line_prose_density($line) >= 0.64) {
+        return 'prose';
+    }
+    return 'text';
+}
+
+function dcb_ocr_sparse_form_policy(array $document_model, array $native_pdf_pass = array()): array {
+    $lines = isset($document_model['lines']) && is_array($document_model['lines']) ? $document_model['lines'] : array();
+    $total = 0;
+    $instruction = 0;
+    $field_like = 0;
+    $prose_like = 0;
+    foreach ($lines as $line_row) {
+        if (!is_array($line_row)) {
+            continue;
+        }
+        $line = (string) ($line_row['text'] ?? '');
+        if (trim($line) === '') {
+            continue;
+        }
+        $total++;
+        $role = dcb_ocr_classify_line_role($line);
+        if ($role === 'instruction') {
+            $instruction++;
+        }
+        if ($role === 'field_label' || $role === 'approval_cue' || $role === 'table_header') {
+            $field_like++;
+        }
+        if ($role === 'prose' || dcb_ocr_line_prose_density($line) >= 0.64) {
+            $prose_like++;
+        }
+    }
+
+    $instruction_ratio = $total > 0 ? ($instruction / $total) : 0.0;
+    $field_ratio = $total > 0 ? ($field_like / $total) : 0.0;
+    $prose_ratio = $total > 0 ? ($prose_like / $total) : 0.0;
+    $native_widgets = max(0, (int) ($native_pdf_pass['widget_count'] ?? 0));
+
+    $is_sparse_instruction_heavy = $total > 8
+        && $instruction_ratio >= 0.24
+        && $prose_ratio >= 0.35
+        && $field_ratio <= 0.38
+        && $native_widgets <= 12;
+
+    return array(
+        'policy_version' => '1.0',
+        'is_sparse_instruction_heavy' => $is_sparse_instruction_heavy,
+        'instruction_ratio' => round($instruction_ratio, 4),
+        'field_signal_ratio' => round($field_ratio, 4),
+        'prose_ratio' => round($prose_ratio, 4),
+        'native_widget_count' => $native_widgets,
+        'max_generic_text_widgets_per_page' => $is_sparse_instruction_heavy ? 3 : 12,
+    );
+}
+
 function dcb_ocr_extract_anchors_from_line(string $line): array {
     $anchors = array();
     if (preg_match('/_{3,}|\.{3,}|-{3,}/', $line)) {
@@ -2938,8 +3222,10 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
     $sections = isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? $document_model['section_candidates'] : array();
     $tables = isset($document_model['table_candidates']) && is_array($document_model['table_candidates']) ? $document_model['table_candidates'] : array();
     $sig_pairs = isset($document_model['signature_date_pairs']) && is_array($document_model['signature_date_pairs']) ? $document_model['signature_date_pairs'] : array();
+    $sparse_policy = dcb_ocr_sparse_form_policy($document_model, $native_pdf_pass);
 
     $widgets = array();
+    $generic_text_by_page = array();
     $section_by_page = array();
     foreach ($sections as $section) {
         if (!is_array($section)) {
@@ -2961,6 +3247,8 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
         $line_index = max(0, (int) ($line_row['line_index'] ?? 0));
         $section_hint = $section_by_page[$page_number] ?? 'main_section';
         $signals = dcb_ocr_extract_anchors_from_line($line);
+        $line_role = dcb_ocr_classify_line_role($line);
+        $prose_density = dcb_ocr_line_prose_density($line);
         $widget_type = '';
         $group_key = '';
         $base_conf = 0.56;
@@ -2989,6 +3277,10 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
             $widget_type = 'text_input';
             $group_key = 'identity_block_' . $page_number . '_' . max(0, (int) floor($line_index / 4));
             $base_conf = 0.68;
+        } elseif (preg_match('/\b(mm\/?dd\/?yyyy|date of birth|dob)\b/i', $line) && preg_match('/_{2,}|\.{2,}/', $line)) {
+            $widget_type = 'date_field';
+            $group_key = 'date_cluster_' . $page_number . '_' . max(0, (int) floor($line_index / 3));
+            $base_conf = 0.72;
         } elseif (preg_match('/_{3,}|\.{3,}|-{3,}/', $line)) {
             $widget_type = 'text_input';
             $base_conf = 0.64;
@@ -2998,8 +3290,29 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
             continue;
         }
 
+        if (!empty($sparse_policy['is_sparse_instruction_heavy'])) {
+            $strong_widget = in_array($widget_type, array('checkbox', 'yes_no_group', 'date_field', 'signature_line', 'initials_line', 'repeater_zone'), true)
+                || $line_role === 'approval_cue';
+            if (($line_role === 'instruction' || $line_role === 'prose') && !$strong_widget) {
+                continue;
+            }
+            if ($widget_type === 'text_input' && $prose_density >= 0.58 && !preg_match('/\b(name|id|member|account|dob|date|relationship|title)\b/i', $line)) {
+                continue;
+            }
+            if (!isset($generic_text_by_page[$page_number])) {
+                $generic_text_by_page[$page_number] = 0;
+            }
+            if ($widget_type === 'text_input') {
+                $generic_text_by_page[$page_number]++;
+                if ($generic_text_by_page[$page_number] > (int) ($sparse_policy['max_generic_text_widgets_per_page'] ?? 3)) {
+                    continue;
+                }
+            }
+        }
+
         $page_conf = isset($page_meta[$page_number]['confidence_proxy']) ? (float) $page_meta[$page_number]['confidence_proxy'] : 0.0;
-        $score = round(max(0.0, min(1.0, $base_conf + (0.16 * $page_conf))), 4);
+        $sparse_penalty = !empty($sparse_policy['is_sparse_instruction_heavy']) && $widget_type === 'text_input' ? 0.08 : 0.0;
+        $score = round(max(0.0, min(1.0, $base_conf + (0.16 * $page_conf) - $sparse_penalty)), 4);
         $widgets[] = array(
             'widget_id' => 'widget_' . (count($widgets) + 1),
             'widget_type' => $widget_type,
@@ -3013,6 +3326,12 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
             'confidence_bucket' => dcb_confidence_bucket($score),
             'geometry' => dcb_ocr_widget_geometry_hint($line_row, $widget_type),
             'signals' => $signals,
+            'line_role' => $line_role,
+            'prose_density' => $prose_density,
+            'sparse_policy' => array(
+                'is_sparse_instruction_heavy' => !empty($sparse_policy['is_sparse_instruction_heavy']),
+                'max_generic_text_widgets_per_page' => max(1, (int) ($sparse_policy['max_generic_text_widgets_per_page'] ?? 3)),
+            ),
             'source' => 'heuristic_line_detector',
         );
     }
@@ -3142,6 +3461,7 @@ function dcb_ocr_build_page_relation_graph(array $document_model, array $widget_
     $lines = isset($document_model['lines']) && is_array($document_model['lines']) ? $document_model['lines'] : array();
     $sections = isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? $document_model['section_candidates'] : array();
     $sig_pairs = isset($document_model['signature_date_pairs']) && is_array($document_model['signature_date_pairs']) ? $document_model['signature_date_pairs'] : array();
+    $tables = isset($document_model['table_candidates']) && is_array($document_model['table_candidates']) ? $document_model['table_candidates'] : array();
 
     $nodes = array();
     $edges = array();
@@ -3157,6 +3477,22 @@ function dcb_ocr_build_page_relation_graph(array $document_model, array $widget_
             'page_number' => max(1, (int) ($section['page_number'] ?? 1)),
             'line_index' => max(0, (int) ($section['line_index'] ?? 0)),
             'label' => sanitize_text_field((string) ($section['label'] ?? 'Section')),
+        );
+    }
+
+    foreach ($tables as $table) {
+        if (!is_array($table)) {
+            continue;
+        }
+        $id = 'table_' . sanitize_key((string) ($table['table_key'] ?? 'table_1'));
+        $nodes[$id] = array(
+            'id' => $id,
+            'node_type' => 'table',
+            'page_number' => max(1, (int) ($table['page_number'] ?? 1)),
+            'line_index' => max(0, (int) ($table['line_start'] ?? 0)),
+            'line_end' => max(0, (int) ($table['line_end'] ?? 0)),
+            'label' => 'Table/Repeater',
+            'confidence_score' => round(max(0.0, min(1.0, (float) ($table['confidence_score'] ?? 0.62))), 4),
         );
     }
 
@@ -3245,8 +3581,17 @@ function dcb_ocr_build_page_relation_graph(array $document_model, array $widget_
                 'from' => $wid,
                 'to' => (string) ($nearest['id'] ?? ''),
                 'relation' => 'nearest_label',
+                'relation_type' => 'label_of',
                 'distance' => $nearest_distance,
                 'confidence' => round(max(0.0, min(1.0, 0.78 - (0.08 * $nearest_distance))), 4),
+                'provenance' => array('source' => 'nearest_text_span', 'version' => '1.1'),
+            );
+            $edges[] = array(
+                'from' => $wid,
+                'to' => (string) ($nearest['id'] ?? ''),
+                'relation' => 'label_of',
+                'confidence' => round(max(0.0, min(1.0, 0.80 - (0.08 * $nearest_distance))), 4),
+                'provenance' => array('source' => 'nearest_text_span', 'version' => '1.1'),
             );
         }
     }
@@ -3274,7 +3619,71 @@ function dcb_ocr_build_page_relation_graph(array $document_model, array $widget_
                     $relation = 'checkbox_label_group';
                 }
                 $edges[] = array('from' => (string) ($a['id'] ?? ''), 'to' => (string) ($b['id'] ?? ''), 'relation' => $relation, 'group_key' => $group_a, 'confidence' => 0.80);
+                $edges[] = array(
+                    'from' => (string) ($a['id'] ?? ''),
+                    'to' => (string) ($b['id'] ?? ''),
+                    'relation' => 'belongs_to_group',
+                    'group_key' => $group_a,
+                    'confidence' => 0.82,
+                    'provenance' => array('source' => 'group_key_match', 'version' => '1.1'),
+                );
+                if (strpos($group_a, 'yes_no') === 0 || strpos($group_a, 'checkbox_cluster') === 0) {
+                    $edges[] = array(
+                        'from' => (string) ($a['id'] ?? ''),
+                        'to' => (string) ($b['id'] ?? ''),
+                        'relation' => 'same_question_group',
+                        'group_key' => $group_a,
+                        'confidence' => 0.80,
+                        'provenance' => array('source' => 'question_group_cluster', 'version' => '1.1'),
+                    );
+                }
             }
+        }
+    }
+
+    foreach ($widget_nodes as $widget) {
+        if (!is_array($widget)) {
+            continue;
+        }
+        $section_hint = sanitize_key((string) ($widget['section_hint'] ?? ''));
+        if ($section_hint === '') {
+            continue;
+        }
+        $section_id = 'section_' . $section_hint;
+        if (!isset($nodes[$section_id])) {
+            continue;
+        }
+        $edges[] = array(
+            'from' => $section_id,
+            'to' => (string) ($widget['id'] ?? ''),
+            'relation' => 'section_contains',
+            'confidence' => 0.76,
+            'provenance' => array('source' => 'widget_section_hint', 'version' => '1.1'),
+        );
+    }
+
+    foreach ($widget_nodes as $widget) {
+        if (!is_array($widget)) {
+            continue;
+        }
+        if (sanitize_key((string) ($widget['widget_type'] ?? '')) !== 'repeater_zone') {
+            continue;
+        }
+        $widget_page = max(1, (int) ($widget['page_number'] ?? 1));
+        foreach ($nodes as $node_id => $node) {
+            if (!is_array($node) || (string) ($node['node_type'] ?? '') !== 'table') {
+                continue;
+            }
+            if ((int) ($node['page_number'] ?? 1) !== $widget_page) {
+                continue;
+            }
+            $edges[] = array(
+                'from' => (string) ($widget['id'] ?? ''),
+                'to' => (string) $node_id,
+                'relation' => 'repeater_row_of',
+                'confidence' => 0.78,
+                'provenance' => array('source' => 'table_candidate_match', 'version' => '1.1'),
+            );
         }
     }
 
@@ -3308,14 +3717,24 @@ function dcb_ocr_build_page_relation_graph(array $document_model, array $widget_
                 'from' => $sig_id,
                 'to' => $date_id,
                 'relation' => 'signature_date_pair',
+                'relation_type' => 'paired_signature_date',
                 'group_key' => $group_key,
                 'confidence' => round(max(0.0, min(1.0, (float) ($pair['confidence_score'] ?? 0.70))), 4),
+                'provenance' => array('source' => 'signature_pair_detector', 'version' => '1.1'),
+            );
+            $edges[] = array(
+                'from' => $sig_id,
+                'to' => $date_id,
+                'relation' => 'paired_signature_date',
+                'group_key' => $group_key,
+                'confidence' => round(max(0.0, min(1.0, (float) ($pair['confidence_score'] ?? 0.72))), 4),
+                'provenance' => array('source' => 'signature_pair_detector', 'version' => '1.1'),
             );
         }
     }
 
     return array(
-        'graph_version' => '1.0',
+        'graph_version' => '1.1',
         'nodes' => array_values($nodes),
         'edges' => $edges,
     );
@@ -3416,7 +3835,15 @@ function dcb_ocr_build_scene_graph(array $document_model, array $widget_candidat
                 'widget_ids' => array_values(array_filter(array_map('sanitize_key', (array) $widget_ids))),
                 'group_type' => strpos((string) $group_key, 'yes_no_') === 0
                     ? 'yes_no'
-                    : (strpos((string) $group_key, 'checkbox_cluster_') === 0 ? 'checkbox_cluster' : (strpos((string) $group_key, 'identity_block_') === 0 ? 'identity_block' : 'generic_group')),
+                    : (strpos((string) $group_key, 'checkbox_cluster_') === 0
+                        ? 'checkbox_cluster'
+                        : (strpos((string) $group_key, 'identity_block_') === 0
+                            ? 'identity_block'
+                            : (strpos((string) $group_key, 'approval_') === 0 || strpos((string) $group_key, 'sig_pair_') === 0
+                                ? 'signature_date_pair'
+                                : (strpos((string) $group_key, 'table_group_') === 0
+                                    ? 'repeater'
+                                    : (strpos((string) $group_key, 'date_cluster_') === 0 ? 'date_cluster' : 'generic_group'))))),
             );
         }
     }
@@ -3466,6 +3893,66 @@ function dcb_ocr_build_scene_graph(array $document_model, array $widget_candidat
         'page_count' => count($pages_out),
         'pages' => $pages_out,
         'relations' => isset($page_graph['edges']) && is_array($page_graph['edges']) ? $page_graph['edges'] : array(),
+    );
+}
+
+function dcb_ocr_build_canonical_form_graph(array $document_model, array $widget_candidates, array $page_graph, array $scene_graph, array $page_meta = array(), array $source_triage = array()): array {
+    $scene_pages = isset($scene_graph['pages']) && is_array($scene_graph['pages']) ? $scene_graph['pages'] : array();
+    $relations = isset($page_graph['edges']) && is_array($page_graph['edges']) ? $page_graph['edges'] : array();
+    $layout_regions = isset($document_model['layout_regions']) && is_array($document_model['layout_regions']) ? $document_model['layout_regions'] : array();
+
+    $pages_out = array();
+    foreach ($scene_pages as $scene_page) {
+        if (!is_array($scene_page)) {
+            continue;
+        }
+        $pn = max(1, (int) ($scene_page['page_number'] ?? 1));
+        $pages_out[] = array(
+            'page_number' => $pn,
+            'confidence_proxy' => round(max(0.0, min(1.0, (float) ($scene_page['confidence_proxy'] ?? ($page_meta[$pn]['confidence_proxy'] ?? 0.0)))), 4),
+            'sections' => isset($scene_page['regions']) && is_array($scene_page['regions']) ? $scene_page['regions'] : array(),
+            'fixed_text_blocks' => isset($scene_page['fixed_text_blocks']) && is_array($scene_page['fixed_text_blocks']) ? $scene_page['fixed_text_blocks'] : array(),
+            'widgets' => isset($scene_page['widgets']) && is_array($scene_page['widgets']) ? $scene_page['widgets'] : array(),
+            'grouped_controls' => isset($scene_page['grouped_controls']) && is_array($scene_page['grouped_controls']) ? $scene_page['grouped_controls'] : array(),
+            'approval_blocks' => isset($scene_page['approval_blocks']) && is_array($scene_page['approval_blocks']) ? $scene_page['approval_blocks'] : array(),
+            'tables' => isset($scene_page['tables']) && is_array($scene_page['tables']) ? $scene_page['tables'] : array(),
+            'repeaters' => array_values(array_filter((array) ($scene_page['grouped_controls'] ?? array()), static function ($group_row) {
+                if (!is_array($group_row)) {
+                    return false;
+                }
+                $group_type = sanitize_key((string) ($group_row['group_type'] ?? ''));
+                return $group_type === 'repeater' || $group_type === 'table';
+            })),
+            'render_hints' => isset($scene_page['render_hints']) && is_array($scene_page['render_hints']) ? $scene_page['render_hints'] : array('style' => 'paper_like', 'preserve_relative_spacing' => true),
+            'provenance' => array(
+                'scene_version' => sanitize_text_field((string) ($scene_graph['scene_version'] ?? '1.0')),
+                'source_engine' => sanitize_text_field((string) ($scene_page['source_engine'] ?? ($page_meta[$pn]['engine'] ?? 'unknown'))),
+            ),
+        );
+    }
+
+    return array(
+        'canonical_version' => '1.0',
+        'graph_kind' => 'canonical_form_graph',
+        'source_profile' => sanitize_key((string) ($source_triage['source_profile'] ?? 'unknown')),
+        'routing_decisions' => isset($source_triage['decisions']) && is_array($source_triage['decisions']) ? array_values(array_filter(array_map('sanitize_key', $source_triage['decisions']))) : array(),
+        'page_count' => count($pages_out),
+        'pages' => $pages_out,
+        'regions' => $layout_regions,
+        'relations' => $relations,
+        'confidence_summary' => array(
+            'document_confidence_proxy' => !empty($pages_out)
+                ? round(array_sum(array_map(static function ($row) {
+                    return is_array($row) ? (float) ($row['confidence_proxy'] ?? 0.0) : 0.0;
+                }, $pages_out)) / max(1, count($pages_out)), 4)
+                : 0.0,
+            'widget_count' => count($widget_candidates),
+            'relation_count' => count($relations),
+        ),
+        'provenance' => array(
+            'generated_from' => array('ocr_document_model', 'ocr_scene_graph', 'ocr_page_graph'),
+            'generated_at' => function_exists('current_time') ? current_time('mysql') : gmdate('Y-m-d H:i:s'),
+        ),
     );
 }
 
@@ -3534,8 +4021,10 @@ function dcb_upload_stage_field_candidate_extraction(array $document_model, arra
     $lines = isset($document_model['lines']) && is_array($document_model['lines']) ? $document_model['lines'] : array();
     $sections = isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? $document_model['section_candidates'] : array();
     $rules = dcb_ocr_get_correction_rules();
+    $sparse_policy = dcb_ocr_sparse_form_policy($document_model, array());
     $candidates = array();
     $seen = array();
+    $line_based_generic_by_page = array();
 
     if (empty($widget_candidates)) {
         $widget_candidates = dcb_ocr_detect_field_widgets($document_model, $page_meta, array());
@@ -3671,6 +4160,14 @@ function dcb_upload_stage_field_candidate_extraction(array $document_model, arra
             continue;
         }
 
+        if (!empty($sparse_policy['is_sparse_instruction_heavy'])) {
+            $line_role = dcb_ocr_classify_line_role($line);
+            $prose_density = dcb_ocr_line_prose_density($line);
+            if ($line_role === 'instruction' || ($line_role === 'prose' && $prose_density >= 0.56)) {
+                continue;
+            }
+        }
+
         $candidate_label = '';
         $signal = '';
         $base_confidence = 0.40;
@@ -3702,6 +4199,10 @@ function dcb_upload_stage_field_candidate_extraction(array $document_model, arra
         }
 
         if (preg_match('/\b(please|instructions?|for office use|return this|do not write|reviewed by)\b/i', $candidate_label)) {
+            continue;
+        }
+
+        if (!empty($sparse_policy['is_sparse_instruction_heavy']) && !preg_match('/\b(name|id|date|dob|signature|initials|relationship|title|yes|no|amount|qty|quantity|phone|email)\b/i', $candidate_label)) {
             continue;
         }
 
@@ -3789,6 +4290,20 @@ function dcb_upload_stage_field_candidate_extraction(array $document_model, arra
             'options' => isset($shape['options']) && is_array($shape['options']) ? $shape['options'] : array(),
             'confidence_reasons' => array_values(array_filter(array('signal_' . $signal, 'page_confidence', 'anchor_context', $normalization_bonus > 0 ? 'normalization_applied' : '', $warning_penalty > 0 ? 'capture_warning_penalty' : ''))),
         );
+
+        if (!empty($sparse_policy['is_sparse_instruction_heavy'])) {
+            $is_generic = in_array((string) ($candidate['suggested_type'] ?? 'text'), array('text', 'textarea'), true)
+                && !preg_match('/\b(name|id|date|signature|initials|relationship|title|yes|no)\b/i', (string) $candidate_label);
+            if (!isset($line_based_generic_by_page[$page_number])) {
+                $line_based_generic_by_page[$page_number] = 0;
+            }
+            if ($is_generic) {
+                $line_based_generic_by_page[$page_number]++;
+                if ($line_based_generic_by_page[$page_number] > max(1, (int) ($sparse_policy['max_generic_text_widgets_per_page'] ?? 3))) {
+                    continue;
+                }
+            }
+        }
 
         if (function_exists('apply_filters')) {
             $candidate = (array) apply_filters('dcb_ocr_candidate_enriched', $candidate, $line_row, $document_model, $page_meta);
@@ -4205,7 +4720,7 @@ function dcb_upload_stage_draft_schema_generation(array $candidates, string $lab
         'ocr_review' => array(
             'origin' => 'ocr_import',
             'created_at' => current_time('mysql'),
-            'pipeline_stages' => array('file_type_inspection', 'native_pdf_first_pass', 'page_quality_routing', 'text_extraction', 'page_rasterization', 'input_normalization', 'ocr_fallback', 'line_block_normalization', 'document_modeling', 'field_widget_detection', 'page_relation_graph', 'scene_graph', 'field_candidate_extraction', 'draft_schema_generation'),
+            'pipeline_stages' => array('file_type_inspection', 'native_pdf_first_pass', 'source_triage', 'page_quality_routing', 'text_extraction', 'page_rasterization', 'input_normalization', 'ocr_fallback', 'line_block_normalization', 'document_modeling', 'field_widget_detection', 'page_relation_graph', 'scene_graph', 'canonical_form_graph', 'field_candidate_extraction', 'draft_schema_generation'),
             'page_extraction' => $page_review,
             'field_confidence_counts' => $confidence_counts,
             'section_count' => count($sections),
@@ -4277,6 +4792,10 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
     $scene_graph = isset($extraction['ocr_scene_graph']) && is_array($extraction['ocr_scene_graph'])
         ? $extraction['ocr_scene_graph']
         : dcb_ocr_build_scene_graph($document_model, $widget_candidates, $page_graph, $page_meta);
+    $source_triage = isset($extraction['source_triage']) && is_array($extraction['source_triage']) ? $extraction['source_triage'] : array();
+    $canonical_graph = isset($extraction['ocr_canonical_form_graph']) && is_array($extraction['ocr_canonical_form_graph'])
+        ? $extraction['ocr_canonical_form_graph']
+        : dcb_ocr_build_canonical_form_graph($document_model, $widget_candidates, $page_graph, $scene_graph, $page_meta, $source_triage);
 
     $candidates = dcb_upload_stage_field_candidate_extraction($document_model, $page_meta, $widget_candidates);
     $template_blocks = dcb_upload_stage_template_block_extraction($document_model);
@@ -4296,6 +4815,8 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
     $draft['ocr_review']['page_graph_edge_count'] = isset($page_graph['edges']) && is_array($page_graph['edges']) ? count($page_graph['edges']) : 0;
     $draft['ocr_review']['scene_page_count'] = isset($scene_graph['pages']) && is_array($scene_graph['pages']) ? count($scene_graph['pages']) : 0;
     $draft['ocr_review']['scene_widget_count'] = count($widget_candidates);
+    $draft['ocr_review']['canonical_page_count'] = isset($canonical_graph['pages']) && is_array($canonical_graph['pages']) ? count($canonical_graph['pages']) : 0;
+    $draft['ocr_review']['canonical_relation_count'] = isset($canonical_graph['relations']) && is_array($canonical_graph['relations']) ? count($canonical_graph['relations']) : 0;
     $draft['ocr_review']['low_confidence_warning'] = !empty($draft['ocr_review']['field_confidence_counts']['low']) && (int) $draft['ocr_review']['field_confidence_counts']['low'] > ((int) ($draft['ocr_review']['field_candidate_count'] ?? 0) / 2);
     $draft['ocr_review']['review_cleanup_burden_proxy'] = isset($draft['ocr_review']['review_cleanup_burden_proxy']) && is_numeric($draft['ocr_review']['review_cleanup_burden_proxy'])
         ? round(max(0, min(1, (float) $draft['ocr_review']['review_cleanup_burden_proxy'])), 4)
@@ -4309,6 +4830,7 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
         : array();
     $draft['ocr_review']['routing_decision'] = sanitize_key((string) ($draft['ocr_review']['page_quality_routing']['routing_decision'] ?? 'standard_ocr_path'));
     $draft['ocr_review']['review_recommended'] = !empty($draft['ocr_review']['page_quality_routing']['review_recommended']);
+    $draft['ocr_review']['source_triage'] = $source_triage;
     if (isset($extraction['input_normalization']) && is_array($extraction['input_normalization'])) {
         $draft['ocr_review']['input_normalization'] = $extraction['input_normalization'];
         $draft['ocr_review']['capture_recommendations'] = isset($extraction['input_normalization']['capture_recommendations']) && is_array($extraction['input_normalization']['capture_recommendations'])
@@ -4330,6 +4852,7 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
         'normalization_stage_application_counts' => isset($extraction['input_normalization']['stage_application_counts']) && is_array($extraction['input_normalization']['stage_application_counts']) ? $extraction['input_normalization']['stage_application_counts'] : array(),
         'normalization_improvement_proxy' => isset($extraction['input_normalization']['normalization_improvement_proxy']) ? round(max(0.0, min(1.0, (float) $extraction['input_normalization']['normalization_improvement_proxy'])), 4) : 0.0,
         'routing_decision' => sanitize_key((string) ($extraction['page_quality_routing']['routing_decision'] ?? 'standard_ocr_path')),
+        'source_triage' => $source_triage,
     );
 
     $draft['ocr_document_model'] = array(
@@ -4351,6 +4874,7 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
     $draft['ocr_widget_candidates'] = $widget_candidates;
     $draft['ocr_page_graph'] = $page_graph;
     $draft['ocr_scene_graph'] = $scene_graph;
+    $draft['ocr_canonical_form_graph'] = $canonical_graph;
 
     return $draft;
 }

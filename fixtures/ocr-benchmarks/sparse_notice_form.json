@@ -1,0 +1,22 @@
+{
+  "id": "sparse_notice_form",
+  "label": "Sparse Notice Form",
+  "pages": [
+    {
+      "page_number": 1,
+      "engine": "fixture",
+      "confidence_proxy": 0.84,
+      "text": "NOTICE OF PRIVACY PRACTICES\nPlease read carefully before signing.\nThis notice explains how your information may be used and disclosed.\nKeep this page for your records.\nPatient Signature: __________________\nDate: __________________\nPrinted Name: __________________"
+    }
+  ],
+  "expected": {
+    "fields": [
+      {"key": "patient_signature", "type": "text"},
+      {"key": "date", "type": "date"},
+      {"key": "printed_name", "type": "text"}
+    ],
+    "sections": [],
+    "min_repeater_count": 0,
+    "max_false_positive": 3
+  }
+}
