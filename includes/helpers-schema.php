@@ -456,6 +456,9 @@ function dcb_normalize_ocr_candidates($candidates): array {
             'confidence_score' => isset($candidate['confidence_score']) && is_numeric($candidate['confidence_score']) ? round(max(0, min(1, (float) $candidate['confidence_score'])), 4) : 0,
             'source_engine' => sanitize_key((string) ($candidate['source_engine'] ?? '')),
             'warning_state' => sanitize_key((string) ($candidate['warning_state'] ?? 'none')),
+            'widget_id' => sanitize_key((string) ($candidate['widget_id'] ?? '')),
+            'widget_type' => sanitize_key((string) ($candidate['widget_type'] ?? '')),
+            'group_key' => sanitize_key((string) ($candidate['group_key'] ?? '')),
         );
 
         if ($row['field_label'] === '' || $row['suggested_key'] === '') {
@@ -472,6 +475,25 @@ function dcb_normalize_ocr_candidates($candidates): array {
         }
         if ($row['region_hint'] === '') {
             unset($row['region_hint']);
+        }
+        if ($row['widget_id'] === '') {
+            unset($row['widget_id']);
+        }
+        if ($row['widget_type'] === '') {
+            unset($row['widget_type']);
+        }
+        if ($row['group_key'] === '') {
+            unset($row['group_key']);
+        }
+
+        if (isset($candidate['geometry']) && is_array($candidate['geometry'])) {
+            $row['geometry'] = array(
+                'x' => round(max(0.0, min(1.0, (float) ($candidate['geometry']['x'] ?? 0.0))), 4),
+                'y' => round(max(0.0, min(1.0, (float) ($candidate['geometry']['y'] ?? 0.0))), 4),
+                'w' => round(max(0.0, min(1.0, (float) ($candidate['geometry']['w'] ?? 0.0))), 4),
+                'h' => round(max(0.0, min(1.0, (float) ($candidate['geometry']['h'] ?? 0.0))), 4),
+                'unit' => sanitize_key((string) ($candidate['geometry']['unit'] ?? 'page_ratio')),
+            );
         }
 
         if (isset($candidate['confidence_reasons']) && is_array($candidate['confidence_reasons'])) {
@@ -544,7 +566,7 @@ function dcb_normalize_digital_twin_hints($hints): array {
         }
     }
 
-    foreach (array('signature_pairs', 'table_regions') as $key) {
+    foreach (array('signature_pairs', 'table_regions', 'grouped_controls', 'approval_blocks') as $key) {
         if (isset($hints[$key]) && is_array($hints[$key])) {
             $out[$key] = $hints[$key];
         }
@@ -586,7 +608,7 @@ function dcb_normalize_ocr_review($review): array {
     if (isset($review['template_block_count']) && is_numeric($review['template_block_count'])) {
         $out['template_block_count'] = max(0, (int) $review['template_block_count']);
     }
-    foreach (array('section_count', 'repeater_count', 'field_candidate_count', 'table_candidate_count', 'signature_candidate_count', 'layout_region_count', 'signature_pair_count') as $count_key) {
+    foreach (array('section_count', 'repeater_count', 'field_candidate_count', 'widget_candidate_count', 'table_candidate_count', 'signature_candidate_count', 'layout_region_count', 'signature_pair_count', 'page_graph_node_count', 'page_graph_edge_count', 'scene_page_count', 'scene_widget_count', 'yes_no_group_count', 'checkbox_cluster_candidate_count', 'signature_group_count', 'identity_group_count') as $count_key) {
         if (isset($review[$count_key]) && is_numeric($review[$count_key])) {
             $out[$count_key] = max(0, (int) $review[$count_key]);
         }
@@ -602,6 +624,40 @@ function dcb_normalize_ocr_review($review): array {
     }
     if (isset($review['input_source_type'])) {
         $out['input_source_type'] = sanitize_key((string) $review['input_source_type']);
+    }
+    if (isset($review['source_classification'])) {
+        $out['source_classification'] = sanitize_key((string) $review['source_classification']);
+    }
+    if (isset($review['routing_decision'])) {
+        $out['routing_decision'] = sanitize_key((string) $review['routing_decision']);
+    }
+    if (isset($review['review_recommended'])) {
+        $out['review_recommended'] = !empty($review['review_recommended']);
+    }
+    if (isset($review['page_quality_routing']) && is_array($review['page_quality_routing'])) {
+        $routing = (array) $review['page_quality_routing'];
+        $rows = isset($routing['page_routes']) && is_array($routing['page_routes']) ? $routing['page_routes'] : array();
+        $clean_rows = array();
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $clean_rows[] = array(
+                'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
+                'route' => sanitize_key((string) ($row['route'] ?? 'standard_ocr_path')),
+                'quality_bucket' => sanitize_key((string) ($row['quality_bucket'] ?? 'unknown')),
+                'risk_score' => round(max(0.0, min(1.0, (float) ($row['risk_score'] ?? 0.0))), 4),
+                'warning_count' => max(0, (int) ($row['warning_count'] ?? 0)),
+                'source_type' => sanitize_key((string) ($row['source_type'] ?? 'unknown')),
+            );
+        }
+        $out['page_quality_routing'] = array(
+            'route_version' => sanitize_text_field((string) ($routing['route_version'] ?? '1.0')),
+            'source_type' => sanitize_key((string) ($routing['source_type'] ?? 'unknown')),
+            'routing_decision' => sanitize_key((string) ($routing['routing_decision'] ?? 'standard_ocr_path')),
+            'review_recommended' => !empty($routing['review_recommended']),
+            'page_routes' => $clean_rows,
+        );
     }
     if (isset($review['input_normalization']) && is_array($review['input_normalization'])) {
         $norm = (array) $review['input_normalization'];
@@ -904,8 +960,10 @@ function dcb_normalize_single_form(array $form): ?array {
         $meta = (array) $form['source_capture_meta'];
         $normalized_form['source_capture_meta'] = array(
             'input_source_type' => sanitize_key((string) ($meta['input_source_type'] ?? 'unknown')),
+            'source_classification' => sanitize_key((string) ($meta['source_classification'] ?? ($meta['input_source_type'] ?? 'unknown'))),
             'capture_warning_count' => max(0, (int) ($meta['capture_warning_count'] ?? 0)),
             'normalization_improvement_proxy' => round(max(0.0, min(1.0, (float) ($meta['normalization_improvement_proxy'] ?? 0.0))), 4),
+            'routing_decision' => sanitize_key((string) ($meta['routing_decision'] ?? 'standard_ocr_path')),
         );
         if (isset($meta['capture_recommendations']) && is_array($meta['capture_recommendations'])) {
             $normalized_form['source_capture_meta']['capture_recommendations'] = array_values(array_filter(array_map('sanitize_text_field', $meta['capture_recommendations'])));
