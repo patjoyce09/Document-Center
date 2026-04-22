@@ -2914,6 +2914,52 @@ function dcb_ocr_line_prose_density(string $line): float {
     return round(max(0.0, min(1.0, $density)), 4);
 }
 
+function dcb_ocr_is_choice_control_line(string $line): bool {
+    $line = (string) $line;
+    if ($line === '') {
+        return false;
+    }
+
+    if (preg_match('/\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line)) {
+        return true;
+    }
+
+    if (preg_match('/\[[ xX]?\]|☐|☑|\([ xX]?\)/u', $line)) {
+        return true;
+    }
+
+    return (bool) preg_match('/\b(check one|select one|mark one|choose one|circle one|tick one)\b/i', $line);
+}
+
+function dcb_ocr_question_stem_key(string $line): string {
+    $line = strtolower(trim((string) $line));
+    if ($line === '') {
+        return '';
+    }
+
+    $line = preg_replace('/\[[ xX]?\]|☐|☑|\([ xX]?\)/u', ' ', $line);
+    $line = preg_replace('/\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', ' ', $line);
+    $line = preg_replace('/\b(check one|select one|mark one|choose one|circle one|tick one|please)\b/i', ' ', $line);
+    $line = preg_replace('/[_\.\-:]+/', ' ', $line);
+    $line = preg_replace('/\s+/', ' ', (string) $line);
+    $line = trim((string) $line);
+
+    if ($line === '') {
+        return '';
+    }
+
+    $parts = preg_split('/\s+/', $line) ?: array();
+    $parts = array_slice(array_values(array_filter($parts, static function ($token) {
+        return strlen((string) $token) >= 2;
+    })), 0, 6);
+
+    if (empty($parts)) {
+        return '';
+    }
+
+    return sanitize_key(implode('_', $parts));
+}
+
 function dcb_ocr_classify_line_role(string $line): string {
     $line = trim((string) $line);
     if ($line === '') {
@@ -2931,7 +2977,7 @@ function dcb_ocr_classify_line_role(string $line): string {
     if (preg_match('/\b(signature|sign here|initials|date)\b/i', $line)) {
         return 'approval_cue';
     }
-    if (preg_match('/_{3,}|\.{3,}|-{3,}|\[[ xX]?\]|☐|☑|\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line)) {
+    if (preg_match('/_{3,}|\.{3,}|-{3,}/', $line) || dcb_ocr_is_choice_control_line($line)) {
         return 'field_label';
     }
     if (dcb_ocr_line_prose_density($line) >= 0.64) {
@@ -2997,10 +3043,10 @@ function dcb_ocr_extract_anchors_from_line(string $line): array {
     if (preg_match('/:\s*$/', $line) || preg_match('/^[^:]{2,80}:/', $line)) {
         $anchors[] = 'colon_label';
     }
-    if (preg_match('/\[[ xX]?\]/', $line) || strpos($line, '☐') !== false || strpos($line, '☑') !== false) {
+    if (preg_match('/\[[ xX]?\]|\([ xX]?\)/u', $line) || strpos($line, '☐') !== false || strpos($line, '☑') !== false) {
         $anchors[] = 'checkbox_marker';
     }
-    if (preg_match('/\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line)) {
+    if (preg_match('/\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line) || preg_match('/\b(check one|select one|choose one)\b/i', $line)) {
         $anchors[] = 'yes_no_pair';
     }
     if (preg_match('/\b(signature|sign here|signed by)\b/i', $line)) {
@@ -3114,7 +3160,7 @@ function dcb_ocr_detect_signature_date_pairs(array $signature_candidates): array
         $line_index = max(0, (int) ($row['line_index'] ?? 0));
 
         $best_date = null;
-        $best_distance = 9999;
+        $best_score = -9999.0;
         foreach ($signature_candidates as $date_row) {
             if (!is_array($date_row)) {
                 continue;
@@ -3125,11 +3171,25 @@ function dcb_ocr_detect_signature_date_pairs(array $signature_candidates): array
             if (max(1, (int) ($date_row['page_number'] ?? 1)) !== $page) {
                 continue;
             }
-            $distance = abs($line_index - max(0, (int) ($date_row['line_index'] ?? 0)));
-            if ($distance < $best_distance && $distance <= 10) {
-                $best_distance = $distance;
+            $date_line = max(0, (int) ($date_row['line_index'] ?? 0));
+            $distance = abs($line_index - $date_line);
+            if ($distance > 14) {
+                continue;
+            }
+
+            $direction_penalty = $date_line >= $line_index ? 0.0 : 0.25;
+            $distance_score = max(0.0, 1.0 - ($distance / 14.0));
+            $keyword_bonus = preg_match('/\b(date|mm\/?dd|yyyy)\b/i', (string) ($date_row['text'] ?? '')) ? 0.10 : 0.0;
+            $score = $distance_score + $keyword_bonus - $direction_penalty;
+            if ($score > $best_score) {
+                $best_score = $score;
                 $best_date = $date_row;
             }
+        }
+
+        $pair_confidence = 0.61;
+        if (is_array($best_date)) {
+            $pair_confidence = round(max(0.62, min(0.90, 0.65 + (0.22 * max(0.0, $best_score)))), 4);
         }
 
         $pairs[] = array(
@@ -3141,7 +3201,7 @@ function dcb_ocr_detect_signature_date_pairs(array $signature_candidates): array
             'date_page_number' => is_array($best_date) ? max(1, (int) ($best_date['page_number'] ?? $page)) : 0,
             'date_line_index' => is_array($best_date) ? max(0, (int) ($best_date['line_index'] ?? 0)) : 0,
             'date_text' => is_array($best_date) ? sanitize_text_field((string) ($best_date['text'] ?? '')) : '',
-            'confidence_score' => is_array($best_date) ? 0.82 : 0.61,
+            'confidence_score' => $pair_confidence,
         );
     }
 
@@ -3356,12 +3416,18 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
         $base_conf = 0.56;
 
         if (preg_match('/\byes\s*\/?\s*no\b|\bno\s*\/?\s*yes\b/i', $line)) {
+            $question_stem = dcb_ocr_question_stem_key($line);
             $widget_type = 'yes_no_group';
-            $group_key = 'yes_no_' . $page_number . '_' . $line_index;
+            $group_key = $question_stem !== ''
+                ? 'yes_no_' . $page_number . '_' . $question_stem
+                : 'yes_no_' . $page_number . '_' . max(0, (int) floor($line_index / 2));
             $base_conf = 0.76;
-        } elseif (preg_match('/\[[ xX]?\]|☐|☑/', $line)) {
+        } elseif (preg_match('/\[[ xX]?\]|☐|☑|\([ xX]?\)/u', $line)) {
+            $question_stem = dcb_ocr_question_stem_key($line);
             $widget_type = 'checkbox';
-            $group_key = 'checkbox_cluster_' . $page_number . '_' . max(0, (int) floor($line_index / 2));
+            $group_key = $question_stem !== ''
+                ? 'checkbox_cluster_' . $page_number . '_' . $question_stem
+                : 'checkbox_cluster_' . $page_number . '_' . max(0, (int) floor($line_index / 2));
             $base_conf = 0.72;
         } elseif (preg_match('/\b(signature|sign here|signed by)\b/i', $line)) {
             $widget_type = 'signature_line';
@@ -3400,6 +3466,12 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
             }
             if ($widget_type === 'text_input' && $prose_density >= 0.58 && !preg_match('/\b(name|id|member|account|dob|date|relationship|title)\b/i', $line)) {
                 continue;
+            }
+            if ($widget_type === 'text_input') {
+                $word_count = (int) preg_match_all('/\b[\p{L}\p{N}]{2,}\b/u', $line);
+                if ($word_count >= 16 && !preg_match('/\b(name|patient|member|account|id|policy|dob|date|relationship|title|phone|contact)\b/i', $line)) {
+                    continue;
+                }
             }
             if (!isset($generic_text_by_page[$page_number])) {
                 $generic_text_by_page[$page_number] = 0;

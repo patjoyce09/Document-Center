@@ -1,0 +1,56 @@
+{
+  "fixture_version": "1.0",
+  "privacy": {
+    "classification": "private_local_only",
+    "contains_sensitive_content": true,
+    "notes": "Use local-only relative paths. Do not commit real packet references in non-local manifests."
+  },
+  "cases": [
+    {
+      "id": "example_packet_case",
+      "label": "Example Filled Packet",
+      "fixture_type": "filled_returned",
+      "source_quality": "scanned_pdf",
+      "source_type": "pdf",
+      "binary_path": "private-fixtures/ocr-realforms/raw-packets/example_packet.pdf",
+      "packet_file": "private-fixtures/ocr-realforms/raw-packets/example_packet.pdf",
+      "source_file": "private-fixtures/ocr-realforms/split-pages/example_packet_p1.pdf",
+      "page_number": 1,
+      "form_family": "admission_consent",
+      "document_type": "intake",
+      "dense_vs_sparse": "dense",
+      "expected_features": {
+        "has_signatures": true,
+        "has_dates": true,
+        "has_yes_no_groups": true,
+        "has_checkboxes": true,
+        "has_table": false
+      },
+      "expected_critical_fields": [
+        "patient_name",
+        "date_of_birth",
+        "signature",
+        "signature_date"
+      ],
+      "expected_groupings": {
+        "yes_no_group_count_min": 1,
+        "checkbox_group_count_min": 1
+      },
+      "expected_signature_date_pairs": {
+        "min_pairs": 1
+      },
+      "expected": {
+        "fields": [
+          { "key": "patient_name", "type": "text" },
+          { "key": "date_of_birth", "type": "date" },
+          { "key": "signature", "type": "text" },
+          { "key": "signature_date", "type": "date" }
+        ],
+        "sections": ["demographics", "consent"],
+        "min_repeater_count": 0,
+        "max_false_positive": 8
+      },
+      "notes": "Example only. Replace with local private benchmark values."
+    }
+  ]
+}

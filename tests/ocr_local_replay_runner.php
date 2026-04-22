@@ -87,11 +87,151 @@ function runner_detect_mime(string $path, string $source_type): string {
     return 'application/octet-stream';
 }
 
+function runner_rel_path(string $path, string $root): string {
+    $clean = str_replace('\\', '/', (string) $path);
+    $root_clean = rtrim(str_replace('\\', '/', (string) $root), '/');
+    if ($root_clean !== '' && strpos($clean, $root_clean . '/') === 0) {
+        return ltrim(substr($clean, strlen($root_clean)), '/');
+    }
+    return ltrim($clean, '/');
+}
+
+function runner_abs_path(string $root, string $value): string {
+    $v = trim((string) $value);
+    if ($v === '') {
+        return '';
+    }
+    if (strpos($v, '/') === 0) {
+        return $v;
+    }
+    return rtrim($root, '/') . '/' . ltrim($v, '/');
+}
+
+function runner_ratio_metric(int $actual, int $expected_min): float {
+    if ($expected_min <= 0) {
+        return $actual <= 0 ? 1.0 : 1.0;
+    }
+    return round(max(0.0, min(1.0, $actual / max(1, $expected_min))), 4);
+}
+
+function runner_extract_group_counts(array $extraction): array {
+    $scene_pages = isset($extraction['ocr_scene_graph']['pages']) && is_array($extraction['ocr_scene_graph']['pages'])
+        ? $extraction['ocr_scene_graph']['pages']
+        : array();
+
+    $yes_no = 0;
+    $checkbox = 0;
+    foreach ($scene_pages as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $groups = isset($page['grouped_controls']) && is_array($page['grouped_controls']) ? $page['grouped_controls'] : array();
+        foreach ($groups as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+            $group_type = sanitize_key((string) ($group['group_type'] ?? ''));
+            if ($group_type === 'yes_no') {
+                $yes_no++;
+            } elseif ($group_type === 'checkbox_cluster') {
+                $checkbox++;
+            }
+        }
+    }
+
+    return array(
+        'yes_no_group_count' => $yes_no,
+        'checkbox_group_count' => $checkbox,
+    );
+}
+
+function runner_page_reports(array $extraction): array {
+    $pages = isset($extraction['pages']) && is_array($extraction['pages']) ? $extraction['pages'] : array();
+    $scene_pages = isset($extraction['ocr_scene_graph']['pages']) && is_array($extraction['ocr_scene_graph']['pages'])
+        ? $extraction['ocr_scene_graph']['pages']
+        : array();
+    $candidates = isset($extraction['ocr_candidates']) && is_array($extraction['ocr_candidates']) ? $extraction['ocr_candidates'] : array();
+    $pairs = isset($extraction['ocr_document_model']['signature_date_pairs']) && is_array($extraction['ocr_document_model']['signature_date_pairs'])
+        ? $extraction['ocr_document_model']['signature_date_pairs']
+        : array();
+
+    $scene_by_page = array();
+    foreach ($scene_pages as $scene_page) {
+        if (!is_array($scene_page)) {
+            continue;
+        }
+        $pn = max(1, (int) ($scene_page['page_number'] ?? 1));
+        $scene_by_page[$pn] = $scene_page;
+    }
+
+    $out = array();
+    foreach ($pages as $page) {
+        if (!is_array($page)) {
+            continue;
+        }
+        $pn = max(1, (int) ($page['page_number'] ?? 1));
+        $scene = isset($scene_by_page[$pn]) && is_array($scene_by_page[$pn]) ? $scene_by_page[$pn] : array();
+        $widgets = isset($scene['widgets']) && is_array($scene['widgets']) ? $scene['widgets'] : array();
+        $groups = isset($scene['grouped_controls']) && is_array($scene['grouped_controls']) ? $scene['grouped_controls'] : array();
+
+        $yes_no_groups = 0;
+        $checkbox_groups = 0;
+        foreach ($groups as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+            $group_type = sanitize_key((string) ($group['group_type'] ?? ''));
+            if ($group_type === 'yes_no') {
+                $yes_no_groups++;
+            } elseif ($group_type === 'checkbox_cluster') {
+                $checkbox_groups++;
+            }
+        }
+
+        $sig_pairs = 0;
+        foreach ($pairs as $pair) {
+            if (!is_array($pair)) {
+                continue;
+            }
+            if (max(1, (int) ($pair['signature_page_number'] ?? 1)) === $pn && max(0, (int) ($pair['date_line_index'] ?? 0)) > 0) {
+                $sig_pairs++;
+            }
+        }
+
+        $review_needed = 0;
+        foreach ($candidates as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+            if (max(1, (int) ($candidate['page_number'] ?? 1)) !== $pn) {
+                continue;
+            }
+            if (sanitize_key((string) ($candidate['warning_state'] ?? '')) === 'review_needed') {
+                $review_needed++;
+            }
+        }
+
+        $out[] = array(
+            'page_number' => $pn,
+            'text_length_proxy' => max(0, (int) ($page['text_length'] ?? strlen((string) ($page['text'] ?? '')))),
+            'confidence_proxy' => round(max(0.0, min(1.0, (float) ($page['confidence_proxy'] ?? 0.0))), 4),
+            'widget_count' => count($widgets),
+            'yes_no_group_count' => $yes_no_groups,
+            'checkbox_group_count' => $checkbox_groups,
+            'signature_pair_count' => $sig_pairs,
+            'review_needed_candidates' => $review_needed,
+        );
+    }
+
+    return $out;
+}
+
 function runner_parse_args(array $argv): array {
     $args = array(
         'manifest' => dirname(__DIR__) . '/fixtures/ocr-realworld/manifest.json',
         'artifact' => '',
         'json' => false,
+        'private' => false,
     );
 
     foreach ($argv as $idx => $value) {
@@ -101,6 +241,10 @@ function runner_parse_args(array $argv): array {
         $v = (string) $value;
         if ($v === '--json') {
             $args['json'] = true;
+            continue;
+        }
+        if ($v === '--private') {
+            $args['private'] = true;
             continue;
         }
         if (strpos($v, '--artifact=') === 0) {
@@ -117,6 +261,10 @@ function runner_parse_args(array $argv): array {
 }
 
 $args = runner_parse_args($argv);
+$root = dirname(__DIR__);
+if (!empty($args['private']) && (string) $args['manifest'] === $root . '/fixtures/ocr-realworld/manifest.json') {
+    $args['manifest'] = $root . '/private-fixtures/ocr-realforms/manifests/realforms.local.json';
+}
 $manifest_file = (string) $args['manifest'];
 if (!file_exists($manifest_file)) {
     fwrite(STDERR, "ocr_local_replay_runner:error manifest_missing {$manifest_file}\n");
@@ -151,6 +299,12 @@ $agg = array(
     'field_type_accuracy' => 0.0,
     'section_detection_quality' => 0.0,
     'repeater_detection_quality' => 0.0,
+    'avg_false_positive_count' => 0.0,
+    'yes_no_grouping_accuracy' => 0.0,
+    'checkbox_grouping_accuracy' => 0.0,
+    'signature_date_pairing_accuracy' => 0.0,
+    'review_cleanup_burden_proxy' => 0.0,
+    'canonical_graph_completeness_proxy' => 0.0,
 );
 
 $sum = array(
@@ -163,10 +317,15 @@ $sum = array(
     'type_accuracy' => 0.0,
     'section_quality' => 0.0,
     'repeater_quality' => 0.0,
+    'false_positive' => 0.0,
+    'yes_no_grouping_accuracy' => 0.0,
+    'checkbox_grouping_accuracy' => 0.0,
+    'signature_date_pairing_accuracy' => 0.0,
+    'cleanup_burden' => 0.0,
+    'canonical_graph_completeness' => 0.0,
 );
 
 $case_reports = array();
-$root = dirname(__DIR__);
 
 foreach ($cases as $case) {
     if (!is_array($case)) {
@@ -174,14 +333,16 @@ foreach ($cases as $case) {
     }
 
     $agg['replay_cases_run']++;
-    $case_id = sanitize_key((string) ($case['case_id'] ?? 'case_' . $agg['replay_cases_run']));
+    $case_id = sanitize_key((string) ($case['case_id'] ?? ($case['id'] ?? 'case_' . $agg['replay_cases_run'])));
     $label = sanitize_text_field((string) ($case['label'] ?? $case_id));
     $source_type = sanitize_key((string) ($case['source_type'] ?? 'other'));
 
-    $sample_path = $root . '/' . ltrim((string) ($case['sample_path'] ?? ''), '/');
-    $binary_path = $root . '/' . ltrim((string) ($case['optional_binary_path'] ?? ''), '/');
+    $sample_path = runner_abs_path($root, (string) ($case['sample_path'] ?? ''));
+    $binary_candidate = (string) ($case['binary_path'] ?? ($case['source_file'] ?? ($case['optional_binary_path'] ?? '')));
+    $binary_path = runner_abs_path($root, $binary_candidate);
     $required_binary = !empty($case['required_local_binary']);
-    $binary_exists = $binary_path !== $root . '/' && file_exists($binary_path);
+    $binary_exists = $binary_path !== '' && file_exists($binary_path);
+    $sample_exists = $sample_path !== '' && file_exists($sample_path);
 
     $replay_mode = 'sample_text_fallback';
     $diag = array();
@@ -206,7 +367,7 @@ foreach ($cases as $case) {
             $replay_mode = 'required_binary_missing_fallback';
         }
 
-        $sample_text = file_exists($sample_path) ? trim((string) file_get_contents($sample_path)) : '';
+        $sample_text = $sample_exists ? trim((string) file_get_contents($sample_path)) : '';
         $before_conf = dcb_text_confidence_proxy($sample_text);
         $pages = array(array(
             'page_number' => 1,
@@ -271,6 +432,10 @@ foreach ($cases as $case) {
 
     $expected = isset($case['expected']) && is_array($case['expected']) ? $case['expected'] : array();
     $expected_fields = isset($expected['fields']) && is_array($expected['fields']) ? $expected['fields'] : array();
+    $expected_features = isset($case['expected_features']) && is_array($case['expected_features']) ? $case['expected_features'] : array();
+    $expected_groupings = isset($case['expected_groupings']) && is_array($case['expected_groupings']) ? $case['expected_groupings'] : array();
+    $expected_signature_pairs = isset($case['expected_signature_date_pairs']) && is_array($case['expected_signature_date_pairs']) ? $case['expected_signature_date_pairs'] : array();
+    $expected_critical_fields = isset($case['expected_critical_fields']) && is_array($case['expected_critical_fields']) ? $case['expected_critical_fields'] : array();
 
     $pred = array();
     foreach ((array) ($draft['fields'] ?? array()) as $field) {
@@ -309,6 +474,22 @@ foreach ($cases as $case) {
     $precision = $tp / max(1, count($pred));
     $recall = $tp / max(1, count($exp));
     $type_accuracy = $tp > 0 ? ($type_hits / $tp) : 0.0;
+    $false_positive_count = max(0, count($pred) - $tp);
+
+    $critical_keys = array();
+    foreach ($expected_critical_fields as $critical_key) {
+        $k = sanitize_key((string) $critical_key);
+        if ($k !== '') {
+            $critical_keys[] = $k;
+        }
+    }
+    $critical_hits = 0;
+    foreach ($critical_keys as $critical_key) {
+        if (isset($pred[$critical_key])) {
+            $critical_hits++;
+        }
+    }
+    $critical_recall = empty($critical_keys) ? 1.0 : ($critical_hits / max(1, count($critical_keys)));
 
     $expected_sections = isset($expected['sections']) && is_array($expected['sections']) ? array_values(array_filter(array_map('sanitize_key', $expected['sections']))) : array();
     $actual_sections = isset($draft['sections']) && is_array($draft['sections']) ? $draft['sections'] : array();
@@ -331,6 +512,33 @@ foreach ($cases as $case) {
     $actual_repeater_count = isset($draft['repeaters']) && is_array($draft['repeaters']) ? count($draft['repeaters']) : 0;
     $repeater_quality = $actual_repeater_count >= $min_repeater_count ? 1.0 : 0.0;
 
+    $quality_metrics = isset($extraction['quality_metrics']) && is_array($extraction['quality_metrics']) ? $extraction['quality_metrics'] : array();
+    $group_counts = runner_extract_group_counts($extraction);
+    $yes_no_actual = max(0, (int) ($group_counts['yes_no_group_count'] ?? 0));
+    $checkbox_actual = max(0, (int) ($group_counts['checkbox_group_count'] ?? 0));
+    $signature_pair_actual = max(0, (int) ($quality_metrics['signature_pair_count'] ?? 0));
+
+    $yes_no_expected_min = max(0, (int) ($expected_groupings['yes_no_group_count_min'] ?? (!empty($expected_features['has_yes_no_groups']) ? 1 : 0)));
+    $checkbox_expected_min = max(0, (int) ($expected_groupings['checkbox_group_count_min'] ?? (!empty($expected_features['has_checkboxes']) ? 1 : 0)));
+    $signature_pair_expected_min = max(0, (int) ($expected_signature_pairs['min_pairs'] ?? (!empty($expected_features['has_signatures']) && !empty($expected_features['has_dates']) ? 1 : 0)));
+
+    $yes_no_grouping_accuracy = runner_ratio_metric($yes_no_actual, $yes_no_expected_min);
+    $checkbox_grouping_accuracy = runner_ratio_metric($checkbox_actual, $checkbox_expected_min);
+    $signature_pairing_accuracy = runner_ratio_metric($signature_pair_actual, $signature_pair_expected_min);
+
+    $cleanup_burden = isset($quality_metrics['review_cleanup_burden_proxy'])
+        ? round(max(0.0, min(1.0, (float) $quality_metrics['review_cleanup_burden_proxy'])), 4)
+        : round($false_positive_count / max(1, count($pred)), 4);
+
+    $canonical_rel = max(0, (int) ($quality_metrics['canonical_relation_count'] ?? 0));
+    $canonical_pages = max(0, (int) ($quality_metrics['canonical_page_count'] ?? 0));
+    $widget_count = max(0, (int) ($quality_metrics['widget_candidate_count'] ?? count($pred)));
+    $page_count = max(1, count((array) ($extraction['pages'] ?? array())));
+    $expected_relation_floor = max(1, (int) floor($widget_count * 0.55));
+    $relation_ratio = max(0.0, min(1.0, $canonical_rel / max(1, $expected_relation_floor)));
+    $page_ratio = max(0.0, min(1.0, $canonical_pages / max(1, $page_count)));
+    $canonical_graph_completeness = round(($relation_ratio * 0.7) + ($page_ratio * 0.3), 4);
+
     $sum['improvement_delta'] += isset($diag['deltas']['confidence_proxy_delta']) ? (float) $diag['deltas']['confidence_proxy_delta'] : 0.0;
     $sum['warning_delta'] += isset($diag['deltas']['warning_count_delta']) ? (float) $diag['deltas']['warning_count_delta'] : 0.0;
     $sum['confidence_delta'] += isset($diag['deltas']['confidence_proxy_delta']) ? (float) $diag['deltas']['confidence_proxy_delta'] : 0.0;
@@ -340,13 +548,27 @@ foreach ($cases as $case) {
     $sum['type_accuracy'] += $type_accuracy;
     $sum['section_quality'] += $section_quality;
     $sum['repeater_quality'] += $repeater_quality;
+    $sum['false_positive'] += $false_positive_count;
+    $sum['yes_no_grouping_accuracy'] += $yes_no_grouping_accuracy;
+    $sum['checkbox_grouping_accuracy'] += $checkbox_grouping_accuracy;
+    $sum['signature_date_pairing_accuracy'] += $signature_pairing_accuracy;
+    $sum['cleanup_burden'] += $cleanup_burden;
+    $sum['canonical_graph_completeness'] += $canonical_graph_completeness;
 
     $case_reports[] = array(
         'case_id' => $case_id,
         'label' => $label,
+        'fixture_type' => sanitize_key((string) ($case['fixture_type'] ?? 'realworld')),
+        'source_quality' => sanitize_key((string) ($case['source_quality'] ?? 'unknown')),
+        'dense_vs_sparse' => sanitize_key((string) ($case['dense_vs_sparse'] ?? 'unknown')),
+        'packet_file' => runner_rel_path((string) ($case['packet_file'] ?? ''), $root),
+        'source_file' => runner_rel_path((string) ($case['source_file'] ?? ''), $root),
+        'binary_path' => runner_rel_path($binary_path, $root),
+        'manifest_page_number' => max(0, (int) ($case['page_number'] ?? 0)),
         'source_type' => $source_type,
         'mode' => $replay_mode,
         'binary_present' => $binary_exists,
+        'sample_present' => $sample_exists,
         'page_count' => max(1, (int) ($diag['after']['page_count'] ?? 1)),
         'before_text_length_proxy' => max(0, (int) ($diag['before']['text_length_proxy'] ?? 0)),
         'after_text_length_proxy' => max(0, (int) ($diag['after']['text_length_proxy'] ?? 0)),
@@ -361,6 +583,25 @@ foreach ($cases as $case) {
         'normalization_stages_applied' => isset($norm['stage_application_counts']) ? $norm['stage_application_counts'] : array(),
         'normalization_improvement_proxy' => round((float) ($diag['after']['improvement_proxy'] ?? 0.0), 4),
         'capture_recommendations' => isset($norm['capture_recommendations']) ? $norm['capture_recommendations'] : array(),
+        'field_precision' => round($precision, 4),
+        'field_recall' => round($recall, 4),
+        'critical_field_recall' => round($critical_recall, 4),
+        'field_type_accuracy' => round($type_accuracy, 4),
+        'false_positive_count' => $false_positive_count,
+        'yes_no_grouping_accuracy' => $yes_no_grouping_accuracy,
+        'checkbox_grouping_accuracy' => $checkbox_grouping_accuracy,
+        'signature_date_pairing_accuracy' => $signature_pairing_accuracy,
+        'review_cleanup_burden_proxy' => $cleanup_burden,
+        'canonical_graph_completeness_proxy' => $canonical_graph_completeness,
+        'yes_no_group_count' => $yes_no_actual,
+        'checkbox_group_count' => $checkbox_actual,
+        'signature_pair_count' => $signature_pair_actual,
+        'quality_metrics' => array(
+            'widget_candidate_count' => $widget_count,
+            'canonical_relation_count' => $canonical_rel,
+            'canonical_page_count' => $canonical_pages,
+        ),
+        'page_reports' => runner_page_reports($extraction),
     );
 }
 
@@ -374,6 +615,12 @@ $agg['field_recall'] = round($sum['recall'] / $count, 4);
 $agg['field_type_accuracy'] = round($sum['type_accuracy'] / $count, 4);
 $agg['section_detection_quality'] = round($sum['section_quality'] / $count, 4);
 $agg['repeater_detection_quality'] = round($sum['repeater_quality'] / $count, 4);
+$agg['avg_false_positive_count'] = round($sum['false_positive'] / $count, 4);
+$agg['yes_no_grouping_accuracy'] = round($sum['yes_no_grouping_accuracy'] / $count, 4);
+$agg['checkbox_grouping_accuracy'] = round($sum['checkbox_grouping_accuracy'] / $count, 4);
+$agg['signature_date_pairing_accuracy'] = round($sum['signature_date_pairing_accuracy'] / $count, 4);
+$agg['review_cleanup_burden_proxy'] = round($sum['cleanup_burden'] / $count, 4);
+$agg['canonical_graph_completeness_proxy'] = round($sum['canonical_graph_completeness'] / $count, 4);
 
 if (empty($args['json'])) {
     foreach ($case_reports as $case_report) {

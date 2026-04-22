@@ -6,3 +6,17 @@
 
 # Runtime/debug
 *.log
+
+# Private local OCR real-form benchmarks (PHI-sensitive)
+private-fixtures/ocr-realforms/raw-packets/*
+private-fixtures/ocr-realforms/split-pages/*
+private-fixtures/ocr-realforms/reports/*
+private-fixtures/ocr-realforms/manifests/*.local.json
+
+# Keep safe scaffolding/example files trackable
+!private-fixtures/ocr-realforms/raw-packets/.gitkeep
+!private-fixtures/ocr-realforms/split-pages/.gitkeep
+!private-fixtures/ocr-realforms/reports/.gitkeep
+!private-fixtures/ocr-realforms/manifests/.gitkeep
+!private-fixtures/ocr-realforms/manifests/*.example.json
+!private-fixtures/ocr-realforms/README.local.md
