@@ -45,6 +45,7 @@ $patch_manifest = array(
     'fixture_version' => '1.0',
     'case_patches' => array(
         'patch_mode_case' => array(
+            'patch_categories' => array('false_positive_removal'),
             'candidate_fields' => array(
                 array(
                     'field_label' => 'Applicant Signature',
@@ -93,11 +94,33 @@ assert_true(!empty($patch_eval['enabled']), 'patch evaluation summary should be 
 assert_true(max(0, (int) ($patch_eval['cases_with_patch'] ?? 0)) === 1, 'summary should report one patched case');
 assert_true(isset($patch_eval['avg_false_positive_delta']), 'summary should include false positive delta');
 assert_true(isset($patch_eval['avg_cleanup_burden_delta']), 'summary should include cleanup burden delta');
+assert_true(isset($patch_eval['by_category']) && is_array($patch_eval['by_category']), 'summary should include per-category patch rollups');
+assert_true(isset($patch_eval['by_category']['false_positive_removal']), 'summary should include false_positive_removal category rollup');
 
 assert_true(!empty($cases), 'runner should return case reports');
 $case0 = isset($cases[0]) && is_array($cases[0]) ? $cases[0] : array();
 assert_true(isset($case0['patch_evaluation']) && is_array($case0['patch_evaluation']), 'case report should include patch evaluation payload');
 assert_true(isset($case0['patch_evaluation']['delta']) && is_array($case0['patch_evaluation']['delta']), 'case patch payload should include delta block');
 assert_true(isset($case0['patch_evaluation']['validation']) && is_array($case0['patch_evaluation']['validation']), 'case patch payload should include validation block');
+assert_true(isset($case0['patch_evaluation']['patch_categories']) && is_array($case0['patch_evaluation']['patch_categories']), 'case patch payload should include inferred categories');
+
+$cmd_filter = sprintf(
+    '%s %s --json --evaluate-patches --manifest=%s --patch-manifest=%s --patch-category=relation_correction',
+    escapeshellarg((string) PHP_BINARY),
+    escapeshellarg($runner_path),
+    escapeshellarg($manifest_path),
+    escapeshellarg($patch_manifest_path)
+);
+$output_filter = array();
+$code_filter = 0;
+exec($cmd_filter, $output_filter, $code_filter);
+assert_true($code_filter === 0, 'category-filtered replay runner should exit cleanly');
+assert_true(!empty($output_filter), 'category-filtered replay runner should emit json output');
+$payload_filter = json_decode((string) implode("\n", $output_filter), true);
+assert_true(is_array($payload_filter), 'category-filtered output should be valid json');
+$summary_filter = isset($payload_filter['summary']) && is_array($payload_filter['summary']) ? $payload_filter['summary'] : array();
+$patch_eval_filter = isset($summary_filter['patch_evaluation']) && is_array($summary_filter['patch_evaluation']) ? $summary_filter['patch_evaluation'] : array();
+assert_true(max(0, (int) ($patch_eval_filter['cases_with_patch_available'] ?? 0)) === 1, 'category filter run should report one available patch case');
+assert_true(max(0, (int) ($patch_eval_filter['cases_with_patch'] ?? 0)) === 0, 'non-matching category filter should skip applying patch case');
 
 echo "ocr_replay_patch_mode_smoke:ok\n";

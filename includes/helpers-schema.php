@@ -125,7 +125,34 @@ function dcb_normalize_hard_stop_rule(array $stop): ?array {
         $normalized['type'] = $type;
     }
 
+    if (isset($stop['semantic_target']) && is_array($stop['semantic_target'])) {
+        $semantic = (array) $stop['semantic_target'];
+        $normalized['semantic_target'] = array(
+            'rule_key' => sanitize_key((string) ($semantic['rule_key'] ?? '')),
+            'rule_type' => sanitize_key((string) ($semantic['rule_type'] ?? '')),
+            'target' => isset($semantic['target']) && is_array($semantic['target']) ? $semantic['target'] : array(),
+        );
+    }
+
     return $normalized;
+}
+
+function dcb_normalize_hard_stop_target(array $target): ?array {
+    $rule_key = sanitize_key((string) ($target['rule_key'] ?? ''));
+    $rule_type = sanitize_key((string) ($target['rule_type'] ?? ''));
+    if ($rule_key === '' || $rule_type === '') {
+        return null;
+    }
+    $severity = sanitize_key((string) ($target['severity'] ?? 'warning'));
+    if (!in_array($severity, array('error', 'warning', 'info'), true)) {
+        $severity = 'warning';
+    }
+    return array(
+        'rule_key' => $rule_key,
+        'rule_type' => $rule_type,
+        'severity' => $severity,
+        'target' => isset($target['target']) && is_array($target['target']) ? $target['target'] : array(),
+    );
 }
 
 function dcb_generate_block_id(): string {
@@ -905,6 +932,18 @@ function dcb_normalize_single_form(array $form): ?array {
         }
     }
 
+    $hard_stop_targets = isset($form['hard_stop_targets']) && is_array($form['hard_stop_targets']) ? $form['hard_stop_targets'] : array();
+    $normalized_hard_stop_targets = array();
+    foreach ($hard_stop_targets as $target_row) {
+        if (!is_array($target_row)) {
+            continue;
+        }
+        $clean_target = dcb_normalize_hard_stop_target($target_row);
+        if ($clean_target !== null) {
+            $normalized_hard_stop_targets[] = $clean_target;
+        }
+    }
+
     if ($label === '' && empty($normalized_fields) && $recipients === '' && empty($normalized_hard_stops)) {
         return null;
     }
@@ -965,6 +1004,9 @@ function dcb_normalize_single_form(array $form): ?array {
     $digital_twin_hints = dcb_normalize_digital_twin_hints($form['digital_twin_hints'] ?? array());
     if (!empty($digital_twin_hints)) {
         $normalized_form['digital_twin_hints'] = $digital_twin_hints;
+    }
+    if (!empty($normalized_hard_stop_targets)) {
+        $normalized_form['hard_stop_targets'] = $normalized_hard_stop_targets;
     }
 
     if (isset($form['source_capture_meta']) && is_array($form['source_capture_meta'])) {
@@ -1202,6 +1244,8 @@ function dcb_form_definitions(bool $for_js = false): array {
             }, (array) ($form['fields'] ?? array()))),
             'hardStops' => isset($form['hard_stops']) && is_array($form['hard_stops']) ? $form['hard_stops'] : array(),
             'hard_stops' => isset($form['hard_stops']) && is_array($form['hard_stops']) ? $form['hard_stops'] : array(),
+            'hardStopTargets' => isset($form['hard_stop_targets']) && is_array($form['hard_stop_targets']) ? $form['hard_stop_targets'] : array(),
+            'hard_stop_targets' => isset($form['hard_stop_targets']) && is_array($form['hard_stop_targets']) ? $form['hard_stop_targets'] : array(),
             'sections' => isset($form['sections']) && is_array($form['sections']) ? $form['sections'] : array(),
             'steps' => isset($form['steps']) && is_array($form['steps']) ? $form['steps'] : array(),
             'repeaters' => isset($form['repeaters']) && is_array($form['repeaters']) ? $form['repeaters'] : array(),

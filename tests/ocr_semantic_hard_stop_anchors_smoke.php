@@ -56,6 +56,9 @@ $canonical = dcb_ocr_build_canonical_form_graph($document_model, $widgets, $page
 $anchors = isset($canonical['semantic_hard_stop_anchors']) && is_array($canonical['semantic_hard_stop_anchors'])
     ? $canonical['semantic_hard_stop_anchors']
     : array();
+$targets = isset($canonical['semantic_hard_stop_targets']) && is_array($canonical['semantic_hard_stop_targets'])
+    ? $canonical['semantic_hard_stop_targets']
+    : array();
 
 assert_true(!empty($anchors), 'canonical should expose semantic hard-stop anchors');
 assert_true(isset($anchors['anchor_schema_version']) && (string) $anchors['anchor_schema_version'] === '1.0', 'anchor schema version should be present');
@@ -69,6 +72,17 @@ assert_true(isset($anchors['sparse_form_critical_field_set']) && is_array($ancho
 assert_true(count((array) ($anchors['approval_blocks'] ?? array())) >= 1, 'approval block anchors should include at least one block');
 assert_true(count((array) ($anchors['control_groups'] ?? array())) >= 1, 'control group anchors should include at least one group');
 assert_true(count((array) ($anchors['demographic_blocks'] ?? array())) >= 1, 'demographic anchors should include at least one region');
+assert_true(!empty($targets), 'canonical should expose semantic hard-stop targets');
+
+$target_types = array();
+foreach ($targets as $target_row) {
+    if (!is_array($target_row)) {
+        continue;
+    }
+    $target_types[] = sanitize_key((string) ($target_row['rule_type'] ?? ''));
+}
+assert_true(in_array('approval_block_incomplete', $target_types, true), 'hard-stop targets should include approval block rules');
+assert_true(in_array('demographic_block_incomplete', $target_types, true), 'hard-stop targets should include demographic rules');
 
 $draft = dcb_ocr_to_draft_form('', 'Semantic Anchor Form', array(
     'pages' => $pages,
@@ -79,7 +93,22 @@ $draft = dcb_ocr_to_draft_form('', 'Semantic Anchor Form', array(
     'ocr_canonical_form_graph' => $canonical,
 ));
 
-assert_true(isset($draft['hard_stops']) && is_array($draft['hard_stops']) && !empty($draft['hard_stops']), 'draft hard_stops should be populated from semantic anchors');
-assert_true(isset($draft['hard_stops']['counts']) && is_array($draft['hard_stops']['counts']), 'draft hard_stops should include counts summary');
+assert_true(isset($draft['hard_stops']) && is_array($draft['hard_stops']) && !empty($draft['hard_stops']), 'draft hard_stops should be generated from semantic targets');
+assert_true(isset($draft['hard_stop_targets']) && is_array($draft['hard_stop_targets']) && !empty($draft['hard_stop_targets']), 'draft should include semantic hard-stop targets');
+assert_true(isset($draft['hard_stop_anchors']) && is_array($draft['hard_stop_anchors']) && !empty($draft['hard_stop_anchors']), 'draft should include semantic hard-stop anchors');
+
+$hard_stop_types = array();
+ $semantic_payload_count = 0;
+foreach ((array) $draft['hard_stops'] as $rule_row) {
+    if (!is_array($rule_row)) {
+        continue;
+    }
+    $hard_stop_types[] = sanitize_key((string) ($rule_row['type'] ?? ''));
+    if (!empty($rule_row['semantic_target']) && is_array($rule_row['semantic_target'])) {
+        $semantic_payload_count++;
+    }
+}
+assert_true(!empty($hard_stop_types), 'generated hard-stop rules should include semantic rule types');
+assert_true($semantic_payload_count > 0, 'generated hard-stop rules should retain semantic target payload metadata');
 
 echo "ocr_semantic_hard_stop_anchors_smoke:ok\n";
