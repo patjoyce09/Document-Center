@@ -1,0 +1,38 @@
+{
+  "fixture_version": "1.0",
+  "notes": "Optional patch replay manifest. Use --patch-manifest=<path> and --evaluate-patches to compare baseline vs reviewer-corrected runs.",
+  "case_patches": {
+    "scanned_pdf_intake": {
+      "candidate_fields": [
+        {
+          "field_label": "Patient Name",
+          "suggested_key": "patient_name",
+          "suggested_type": "text",
+          "decision": "accept",
+          "confidence_bucket": "high"
+        },
+        {
+          "field_label": "Date of Birth",
+          "suggested_key": "date_of_birth",
+          "suggested_type": "date",
+          "decision": "accept",
+          "confidence_bucket": "high"
+        },
+        {
+          "field_label": "Phone",
+          "suggested_key": "phone",
+          "suggested_type": "text",
+          "decision": "accept",
+          "confidence_bucket": "high"
+        },
+        {
+          "field_label": "Signature",
+          "suggested_key": "signature",
+          "suggested_type": "text",
+          "decision": "accept",
+          "confidence_bucket": "medium"
+        }
+      ]
+    }
+  }
+}

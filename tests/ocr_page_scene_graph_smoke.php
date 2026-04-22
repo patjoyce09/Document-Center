@@ -95,5 +95,8 @@ assert_true($approval_block_count >= 1, 'scene graph should contain approval/sig
 assert_true(isset($canonical_graph['graph_kind']) && (string) $canonical_graph['graph_kind'] === 'canonical_form_graph', 'canonical graph should expose canonical form graph kind');
 assert_true(isset($canonical_graph['pages']) && is_array($canonical_graph['pages']) && count($canonical_graph['pages']) === 2, 'canonical graph should preserve page count');
 assert_true(isset($canonical_graph['relations']) && is_array($canonical_graph['relations']) && count($canonical_graph['relations']) > 0, 'canonical graph should include relations');
+assert_true(isset($canonical_graph['semantic_hard_stop_anchors']) && is_array($canonical_graph['semantic_hard_stop_anchors']), 'canonical graph should include semantic hard-stop anchors');
+assert_true(isset($canonical_graph['reviewer_patch']) && is_array($canonical_graph['reviewer_patch']) && empty($canonical_graph['reviewer_patch']['applied']), 'canonical graph should expose default reviewer patch metadata');
+assert_true(isset($canonical_graph['correction_provenance']) && is_array($canonical_graph['correction_provenance']) && count($canonical_graph['correction_provenance']) === 0, 'canonical graph should expose empty correction provenance by default');
 
 echo "ocr_page_scene_graph_smoke:ok\n";

@@ -33,6 +33,7 @@ The snapshot includes direct links to Setup & Operations, OCR diagnostics/review
 - Remote OCR requires HTTPS API base URL + API key.
 - Auto mode can run local fallback when remote is incomplete.
 - Queue health and diagnostics remain in **OCR Diagnostics**.
+- For local dev benchmark prerequisites and command checks, see [docs/ocr-local-vs-remote.md](docs/ocr-local-vs-remote.md).
 
 ## Intake / Resource Center / Traceability
 
