@@ -16,6 +16,32 @@ jobs:
       - name: Lint PHP files
         run: |
           find . -type f -name "*.php" -not -path "*/vendor/*" -print0 | xargs -0 -n1 php -l
+      - name: Validate release version consistency
+        run: |
+          PLUGIN_VERSION="$(awk -F': ' '/^[[:space:]]*\*[[:space:]]*Version:/ {print $2; exit}' document-center-builder.php | tr -d '\r' | sed -E 's/[[:space:]]+$//')"
+          DCB_VERSION="$(awk -F"'" '/define\(\x27DCB_VERSION\x27/ {print $4; exit}' document-center-builder.php | tr -d '\r' | sed -E 's/[[:space:]]+$//')"
+          STABLE_TAG="$(awk -F': ' '/^Stable tag:/ {print $2; exit}' readme.txt | tr -d '\r' | sed -E 's/[[:space:]]+$//')"
+
+          if [[ -z "$PLUGIN_VERSION" || -z "$DCB_VERSION" || -z "$STABLE_TAG" ]]; then
+            echo "Failed to detect one or more versions (plugin, DCB_VERSION, stable tag)." >&2
+            exit 1
+          fi
+
+          if [[ "$PLUGIN_VERSION" != "$DCB_VERSION" ]]; then
+            echo "Version mismatch: plugin header=$PLUGIN_VERSION DCB_VERSION=$DCB_VERSION" >&2
+            exit 1
+          fi
+
+          if [[ "$PLUGIN_VERSION" != "$STABLE_TAG" ]]; then
+            echo "Version mismatch: plugin header=$PLUGIN_VERSION stable tag=$STABLE_TAG" >&2
+            exit 1
+          fi
+
+          echo "Version consistency OK: $PLUGIN_VERSION"
+      - name: Build release package
+        run: |
+          chmod +x ./scripts/build-release.sh
+          ./scripts/build-release.sh
       - name: Run smoke tests
         run: |
           php tests/schema_smoke.php
