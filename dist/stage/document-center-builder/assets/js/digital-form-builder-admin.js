@@ -32,6 +32,10 @@
     return String(v || '').split(',').map(function (s) { return slugify(s.trim()); }).filter(Boolean);
   }
 
+  function asObject(v) {
+    return v && typeof v === 'object' ? v : {};
+  }
+
   function clamp01(v) {
     var n = Number(v || 0);
     if (n < 0) return 0;
@@ -151,6 +155,278 @@
     f.ocr_candidates = asArray(f.ocr_candidates);
     f.ocr_review = f.ocr_review && typeof f.ocr_review === 'object' ? f.ocr_review : {};
     return f;
+  }
+
+  function ensureRelationalIntegrity(form) {
+    var fields = asArray(form && form.fields);
+    var sections = asArray(form && form.sections);
+    var steps = asArray(form && form.steps);
+
+    var fieldKeys = fields.map(function (f) { return slugify(f && f.key); }).filter(Boolean);
+    if (!sections.length) {
+      sections = [{ key: 'general', label: 'General', field_keys: fieldKeys.slice() }];
+    }
+
+    var sectionMap = {};
+    sections = sections.map(function (s, idx) {
+      var key = slugify(s && s.key) || ('section_' + (idx + 1));
+      var fieldRefs = asArray(s && s.field_keys).map(slugify).filter(function (k) { return fieldKeys.indexOf(k) >= 0; });
+      sectionMap[key] = true;
+      return {
+        key: key,
+        label: String((s && s.label) || key),
+        field_keys: fieldRefs
+      };
+    });
+
+    if (!steps.length) {
+      steps = [{ key: 'step_1', label: 'Step 1', section_keys: [sections[0].key] }];
+    }
+
+    steps = steps.map(function (s, idx) {
+      var refs = asArray(s && s.section_keys).map(slugify).filter(function (k) { return !!sectionMap[k]; });
+      if (!refs.length && sections.length) refs = [sections[0].key];
+      return {
+        key: slugify(s && s.key) || ('step_' + (idx + 1)),
+        label: String((s && s.label) || ('Step ' + (idx + 1))),
+        section_keys: refs
+      };
+    });
+
+    form.sections = sections;
+    form.steps = steps;
+    return form;
+  }
+
+  function autoBuildDocumentFromFields(form) {
+    var fields = asArray(form && form.fields);
+    var fieldKeys = fields.map(function (f) { return slugify(f && f.key); }).filter(Boolean);
+    var sectionKey = 'general';
+    form.sections = [{ key: sectionKey, label: 'General', field_keys: fieldKeys.slice() }];
+    form.steps = [{ key: 'step_1', label: 'Step 1', section_keys: [sectionKey] }];
+    form.document_nodes = fieldKeys.map(function (k) { return { type: 'field', field_key: k }; });
+    return form;
+  }
+
+  function moveListItem(list, fromIdx, toIdx) {
+    if (!Array.isArray(list)) return list;
+    if (fromIdx === toIdx) return list;
+    if (fromIdx < 0 || toIdx < 0 || fromIdx >= list.length || toIdx >= list.length) return list;
+    var next = list.slice();
+    var moved = next.splice(fromIdx, 1)[0];
+    next.splice(toIdx, 0, moved);
+    return next;
+  }
+
+  function renderSortList(kind, rows, toLabel) {
+    var out = ['<ul class="dcb-sort-list" data-sort-kind="' + escapeHtml(kind) + '">'];
+    asArray(rows).forEach(function (row, idx) {
+      out.push('<li class="dcb-sort-item" draggable="true" data-sort-kind="' + escapeHtml(kind) + '" data-sort-index="' + idx + '"><span class="dcb-sort-handle" aria-hidden="true">⋮⋮</span><span class="dcb-sort-text">' + escapeHtml(toLabel(row, idx)) + '</span></li>');
+    });
+    out.push('</ul>');
+    return out.join('');
+  }
+
+  function ensureUniqueFieldKey(form, base) {
+    var seed = slugify(base || 'field') || 'field';
+    var key = seed;
+    var n = 2;
+    while (asArray(form && form.fields).find(function (f) { return String((f && f.key) || '') === key; })) {
+      key = seed + '_' + n;
+      n += 1;
+    }
+    return key;
+  }
+
+  function ensureUniqueBlockId(form, base) {
+    var seed = slugify(base || 'blk') || 'blk';
+    var key = seed;
+    var n = 2;
+    while (asArray(form && form.template_blocks).find(function (b) { return String((b && b.block_id) || '') === key; })) {
+      key = seed + '_' + n;
+      n += 1;
+    }
+    return key;
+  }
+
+  function canvasNodeSummary(form, node, idx) {
+    if (!node || typeof node !== 'object') {
+      return { title: 'Unknown node', meta: '', kind: 'unknown' };
+    }
+    if (node.type === 'field') {
+      var f = asArray(form && form.fields).find(function (row) { return String((row && row.key) || '') === String(node.field_key || ''); }) || {};
+      return {
+        title: String(f.label || node.field_key || ('Field ' + (idx + 1))),
+        meta: 'field · ' + String(f.type || 'text') + ' · key: ' + String(node.field_key || ''),
+        kind: 'field'
+      };
+    }
+    if (node.type === 'block') {
+      var b = asArray(form && form.template_blocks).find(function (row) { return String((row && row.block_id) || '') === String(node.block_id || ''); }) || {};
+      var blockType = String(b.type || 'paragraph');
+      var txt = String(b.text || '');
+      if (txt.length > 42) txt = txt.slice(0, 39) + '...';
+      return {
+        title: txt || String(node.block_id || ('Block ' + (idx + 1))),
+        meta: 'block · ' + blockType + ' · id: ' + String(node.block_id || ''),
+        kind: 'block'
+      };
+    }
+    return { title: 'Unknown node', meta: '', kind: 'unknown' };
+  }
+
+  function renderCanvasPanel(form, selectedNodeIdx) {
+    var nodes = asArray(form && form.document_nodes);
+    var safeSel = (selectedNodeIdx >= 0 && selectedNodeIdx < nodes.length) ? selectedNodeIdx : -1;
+    var current = safeSel >= 0 ? nodes[safeSel] : null;
+    var summary = canvasNodeSummary(form, current, safeSel);
+
+    var out = ['<section class="dcb-panel"><h3>Visual Builder Canvas (Beta)</h3>'];
+    out.push('<p class="description">Drag rows to reorder output flow. Click a row to edit properties. This mirrors how the front-end document is assembled.</p>');
+    out.push('<div class="dcb-canvas-shell">');
+
+    out.push('<aside class="dcb-canvas-palette">');
+    out.push('<h4>Add to canvas</h4>');
+    out.push('<div class="dcb-canvas-palette-grid">');
+    out.push('<button type="button" class="button" data-act="canvas-add-field" data-ftype="text">+ Text field</button>');
+    out.push('<button type="button" class="button" data-act="canvas-add-field" data-ftype="email">+ Email field</button>');
+    out.push('<button type="button" class="button" data-act="canvas-add-field" data-ftype="date">+ Date field</button>');
+    out.push('<button type="button" class="button" data-act="canvas-add-field" data-ftype="checkbox">+ Checkbox</button>');
+    out.push('<button type="button" class="button" data-act="canvas-add-block" data-btype="paragraph">+ Paragraph block</button>');
+    out.push('<button type="button" class="button" data-act="canvas-add-block" data-btype="heading">+ Heading block</button>');
+    out.push('</div>');
+    out.push('</aside>');
+
+    out.push('<div class="dcb-canvas-flow">');
+    out.push('<h4>Canvas flow</h4>');
+    out.push('<ul class="dcb-canvas-list">');
+    if (!nodes.length) {
+      out.push('<li class="dcb-canvas-empty">No nodes yet. Add a field or block.</li>');
+    } else {
+      nodes.forEach(function (node, idx) {
+        var s = canvasNodeSummary(form, node, idx);
+        out.push('<li class="dcb-canvas-node ' + (idx === safeSel ? 'is-selected' : '') + '" draggable="true" data-act="canvas-select-node" data-node-index="' + idx + '">'
+          + '<span class="dcb-canvas-grip">⋮⋮</span>'
+          + '<div class="dcb-canvas-node-copy"><strong>' + escapeHtml(s.title) + '</strong><small>' + escapeHtml(s.meta) + '</small></div>'
+          + '</li>');
+      });
+    }
+    out.push('</ul>');
+    out.push('</div>');
+
+    out.push('<aside class="dcb-canvas-props">');
+    out.push('<h4>Properties</h4>');
+    if (!current) {
+      out.push('<p class="description">Select a node to edit.</p>');
+    } else {
+      out.push('<p class="description"><strong>' + escapeHtml(summary.kind) + '</strong></p>');
+      if (current.type === 'field') {
+        var field = asArray(form && form.fields).find(function (f) { return String((f && f.key) || '') === String(current.field_key || ''); }) || {};
+        out.push('<label>Field Key<input type="text" data-act="canvas-field-key" data-node-index="' + safeSel + '" value="' + escapeHtml(String(field.key || current.field_key || '')) + '"/></label>');
+        out.push('<label>Label<input type="text" data-act="canvas-field-label" data-node-index="' + safeSel + '" value="' + escapeHtml(String(field.label || '')) + '"/></label>');
+        out.push('<label>Type<select data-act="canvas-field-type" data-node-index="' + safeSel + '">' + typeOptions(field.type || 'text') + '</select></label>');
+        out.push('<label><input type="checkbox" data-act="canvas-field-required" data-node-index="' + safeSel + '" ' + (field.required ? 'checked' : '') + '/> Required</label>');
+      } else if (current.type === 'block') {
+        var block = asArray(form && form.template_blocks).find(function (b) { return String((b && b.block_id) || '') === String(current.block_id || ''); }) || {};
+        var blockTypeMap = {};
+        templateBlockTypes.forEach(function (t) { blockTypeMap[t] = t; });
+        out.push('<label>Block ID<input type="text" data-act="canvas-block-id" data-node-index="' + safeSel + '" value="' + escapeHtml(String(block.block_id || current.block_id || '')) + '"/></label>');
+        out.push('<label>Type<select data-act="canvas-block-type" data-node-index="' + safeSel + '">' + selectOptions(blockTypeMap, block.type || 'paragraph') + '</select></label>');
+        out.push('<label>Text<input type="text" data-act="canvas-block-text" data-node-index="' + safeSel + '" value="' + escapeHtml(String(block.text || '')) + '"/></label>');
+      }
+      out.push('<p class="dcb-canvas-prop-actions"><button type="button" class="button" data-act="canvas-duplicate-node" data-node-index="' + safeSel + '">Duplicate</button> <button type="button" class="button button-link-delete" data-act="canvas-delete-node" data-node-index="' + safeSel + '">Delete</button></p>');
+    }
+    out.push('</aside>');
+
+    out.push('</div></section>');
+    return out.join('');
+  }
+
+  function renderSectionLanesPanel(form) {
+    var steps = asArray(form && form.steps);
+    var sections = asArray(form && form.sections);
+    var fields = asArray(form && form.fields);
+    var sectionByKey = {};
+    sections.forEach(function (s) {
+      var key = String((s && s.key) || '');
+      if (key) sectionByKey[key] = s;
+    });
+    var fieldByKey = {};
+    fields.forEach(function (f) {
+      var key = String((f && f.key) || '');
+      if (key) fieldByKey[key] = f;
+    });
+    var assigned = {};
+    sections.forEach(function (s) {
+      asArray(s && s.field_keys).forEach(function (fk) {
+        fk = String(fk || '');
+        if (fk) assigned[fk] = true;
+      });
+    });
+    var unassignedFields = fields.filter(function (f) {
+      var key = String((f && f.key) || '');
+      return key && !assigned[key];
+    });
+
+    var out = ['<section class="dcb-panel"><h3>Section & Page Lanes</h3>'];
+    out.push('<p class="description">Drag a field chip into a section lane to remap it. This updates section wiring automatically.</p>');
+    out.push('<p><button type="button" class="button" data-act="lane-add-step">Add Step</button></p>');
+
+    if (!steps.length) {
+      out.push('<p class="description">No steps yet.</p></section>');
+      return out.join('');
+    }
+
+    out.push('<div class="dcb-lanes-wrap">');
+    steps.forEach(function (step, stepIdx) {
+      var stepKey = String((step && step.key) || ('step_' + (stepIdx + 1)));
+      var stepLabel = String((step && step.label) || ('Step ' + (stepIdx + 1)));
+      var sectionKeys = asArray(step && step.section_keys).map(String).filter(Boolean);
+
+      out.push('<article class="dcb-lane-step"><header>'
+        + '<label>Step Label <input type="text" data-act="lane-step-label" data-step-index="' + stepIdx + '" value="' + escapeHtml(stepLabel) + '"/></label>'
+        + '<label>Step Key <input type="text" data-act="lane-step-key" data-step-index="' + stepIdx + '" value="' + escapeHtml(stepKey) + '"/></label>'
+        + '<button type="button" class="button-link" data-act="lane-add-section" data-step-index="' + stepIdx + '">+ Add Section</button>'
+        + '<button type="button" class="button-link-delete" data-act="lane-delete-step" data-step-index="' + stepIdx + '">Delete Step</button>'
+        + '</header>');
+      out.push('<div class="dcb-lane-step-drop" data-act="lane-step-drop-zone" data-step-index="' + stepIdx + '">Drop here to move field into this step</div>');
+      if (!sectionKeys.length) {
+        out.push('<p class="description">No sections assigned to this step.</p>');
+      } else {
+        sectionKeys.forEach(function (sectionKey) {
+          var section = sectionByKey[sectionKey] || null;
+          if (!section) return;
+          out.push('<div class="dcb-lane-section" data-act="lane-drop-zone" data-step-index="' + stepIdx + '" data-section-key="' + escapeHtml(sectionKey) + '">');
+          out.push('<div class="dcb-lane-section-head">'
+            + '<label>Section Label <input type="text" data-act="lane-section-label" data-step-index="' + stepIdx + '" data-section-key="' + escapeHtml(sectionKey) + '" value="' + escapeHtml(String(section.label || sectionKey)) + '"/></label>'
+            + '<label>Section Key <input type="text" data-act="lane-section-key" data-step-index="' + stepIdx + '" data-section-key="' + escapeHtml(sectionKey) + '" value="' + escapeHtml(sectionKey) + '"/></label>'
+            + '<button type="button" class="button-link-delete" data-act="lane-delete-section" data-step-index="' + stepIdx + '" data-section-key="' + escapeHtml(sectionKey) + '">Delete Section</button>'
+            + '</div>');
+          out.push('<div class="dcb-lane-chips">');
+          asArray(section.field_keys).forEach(function (fieldKey) {
+            var f = fieldByKey[String(fieldKey || '')] || null;
+            if (!f) return;
+            out.push('<span class="dcb-lane-chip" draggable="true" data-act="lane-drag-field" data-step-index="' + stepIdx + '" data-from-section="' + escapeHtml(sectionKey) + '" data-field-key="' + escapeHtml(String(f.key || '')) + '">' + escapeHtml(String(f.label || f.key || 'Field')) + ' <em>(' + escapeHtml(String(f.type || 'text')) + ')</em> <button type="button" class="button-link-delete" data-act="lane-remove-field" data-step-index="' + stepIdx + '" data-section-key="' + escapeHtml(sectionKey) + '" data-field-key="' + escapeHtml(String(f.key || '')) + '">×</button></span>');
+          });
+          out.push('</div>');
+          out.push('</div>');
+        });
+      }
+      out.push('</article>');
+    });
+
+    out.push('<div class="dcb-lane-unassigned" data-act="lane-unassigned-drop-zone"><strong>Unassigned fields</strong><p class="description">Drop here to remove a field from all sections (keeps field in form).</p><div class="dcb-lane-chips">');
+    if (!unassignedFields.length) {
+      out.push('<span class="description">No unassigned fields.</span>');
+    } else {
+      unassignedFields.forEach(function (f) {
+        out.push('<span class="dcb-lane-chip" draggable="true" data-act="lane-drag-field" data-from-section="" data-field-key="' + escapeHtml(String(f.key || '')) + '">' + escapeHtml(String(f.label || f.key || 'Field')) + ' <em>(' + escapeHtml(String(f.type || 'text')) + ')</em></span>');
+      });
+    }
+    out.push('</div></div>');
+
+    out.push('</div></section>');
+    return out.join('');
   }
 
   function makeDefaultField(n) {
@@ -435,14 +711,90 @@
     return out.join('');
   }
 
-  function getBackgroundImageForLayout(form) {
-    var bg = form && form.digital_twin_background && typeof form.digital_twin_background === 'object' ? form.digital_twin_background : {};
+  function resolveBackgroundForPage(form, pageNumber) {
+    var bg = asObject(form && form.digital_twin_background);
+    var pages = asArray(bg.pages);
+    if (!pages.length) {
+      return {
+        page_number: 1,
+        image_url: String(bg.image_url || '')
+      };
+    }
+    var target = Math.max(1, Number(pageNumber || 1));
+    var row = pages.find(function (p) { return Number(p && p.page_number || 1) === target; }) || pages[0] || {};
+    return {
+      page_number: Math.max(1, Number(row.page_number || target)),
+      image_url: String(row.image_url || '')
+    };
+  }
+
+  function resolveFieldHint(form, field, idx) {
+    var hints = asObject(form && form.digital_twin_hints);
+    var rows = asArray(hints.field_layout);
+    var key = String(field && field.key || '');
+    var row = rows.find(function (r) { return String((r && r.field_key) || '') === key; }) || {};
+    var meta = asObject(field && field.ocr_meta);
+    var g = asObject(meta.geometry);
+    var x = Number(g.x);
+    var y = Number(g.y);
+    var w = Number(g.w);
+    var h = Number(g.h);
+    if (!(x >= 0 && x <= 1) || !(y >= 0 && y <= 1) || !(w > 0 && w <= 1) || !(h > 0 && h <= 1)) {
+      var fallback = ensureFieldGeometry(field, idx);
+      x = Number(fallback.x || 0);
+      y = Number(fallback.y || 0);
+      w = Number(fallback.w || 0.4);
+      h = Number(fallback.h || 0.06);
+    }
+    return {
+      page_number: Math.max(1, Number(row.page_number || meta.page_number || 1)),
+      geometry: {
+        x: clamp01(x),
+        y: clamp01(y),
+        w: Math.max(0.08, Math.min(1, Number(w || 0.4))),
+        h: Math.max(0.03, Math.min(1, Number(h || 0.06))),
+        unit: 'page_ratio'
+      }
+    };
+  }
+
+  function frontEndOverlayPreviewHtml(form, pageNumber) {
+    var bg = resolveBackgroundForPage(form, pageNumber);
+    if (!bg.image_url) {
+      return '<p class="description">No scanned background attached. Use <strong>Attach/Replace Scan Background</strong> in Layout Positioning.</p>';
+    }
+
+    var fields = asArray(form && form.fields);
+    var out = ['<div class="th-df-card"><div class="th-df-paper"><div class="th-df-overlay-stage">'];
+    out.push('<img class="th-df-overlay-background" alt="Scanned form background" src="' + escapeHtml(bg.image_url) + '"/>');
+    out.push('<div class="th-df-overlay-fields">');
+    fields.forEach(function (f, i) {
+      if (!f || !f.key) return;
+      var hint = resolveFieldHint(form, f, i);
+      if (Number(hint.page_number || 1) !== Number(bg.page_number || 1)) return;
+      var g = hint.geometry || {};
+      out.push('<div class="th-df-field th-df-field--overlay" style="left:' + (Number(g.x || 0) * 100) + '%;top:' + (Number(g.y || 0) * 100) + '%;width:' + (Number(g.w || 0.4) * 100) + '%;margin:0;position:absolute;z-index:5;">'
+        + '<label class="th-df-label">' + escapeHtml(String(f.label || f.key)) + (f.required ? ' *' : '') + '</label>'
+        + '<input class="th-df-input" type="text" disabled placeholder="' + escapeHtml(String(f.label || f.key)) + '"/>'
+        + '</div>');
+    });
+    out.push('</div></div></div></div>');
+    return out.join('');
+  }
+
+  function getPageOptions(form) {
+    var bg = asObject(form && form.digital_twin_background);
     var pages = asArray(bg.pages);
     if (pages.length) {
-      var first = pages[0] && typeof pages[0] === 'object' ? pages[0] : {};
-      return String(first.image_url || bg.image_url || '');
+      return pages.map(function (p, idx) {
+        var num = Math.max(1, Number(p && p.page_number || (idx + 1)));
+        return { page_number: num, label: 'Page ' + num };
+      });
     }
-    return String(bg.image_url || '');
+    if (String(bg.image_url || '')) {
+      return [{ page_number: 1, label: 'Page 1' }];
+    }
+    return [];
   }
 
   function ensureFieldGeometry(field, idx) {
@@ -480,20 +832,33 @@
     return field.ocr_meta.geometry;
   }
 
-  function layoutEditorHtml(form) {
-    var bg = getBackgroundImageForLayout(form);
+  function layoutEditorHtml(form, pageNumber) {
+    var page = resolveBackgroundForPage(form, pageNumber);
+    var bg = String(page.image_url || '');
+    var pages = getPageOptions(form);
+    var controls = ['<div class="dcb-layout-controls">'];
+    if (pages.length > 1) {
+      controls.push('<label>Page <select data-act="layout-page">' + pages.map(function (p) {
+        return '<option value="' + Number(p.page_number || 1) + '" ' + (Number(p.page_number || 1) === Number(page.page_number || 1) ? 'selected' : '') + '>' + escapeHtml(p.label) + '</option>';
+      }).join('') + '</select></label>');
+    }
+    controls.push('<button type="button" class="button" data-act="attach-bg">Attach/Replace Scan Background</button>');
+    controls.push('</div>');
     if (!bg) {
-      return '<p class="description">No scanned background found for this form. Re-run OCR extract from seed PDF/image to enable drag positioning.</p>';
+      controls.push('<p class="description">No scanned background found for this form. Choose a seed PDF/image above, then click <strong>Attach/Replace Scan Background</strong>.</p>');
+      return controls.join('');
     }
 
-    var out = ['<div class="dcb-layout-stage">', '<img src="' + escapeHtml(bg) + '" alt="Scanned form background" class="dcb-layout-bg"/>', '<div class="dcb-layout-overlay">'];
+    var out = [controls.join(''), '<div class="dcb-layout-stage">', '<img src="' + escapeHtml(bg) + '" alt="Scanned form background" class="dcb-layout-bg"/>', '<div class="dcb-layout-overlay">'];
     asArray(form.fields).forEach(function (f, i) {
       if (!f || !f.key) return;
-      var g = ensureFieldGeometry(f, i);
-      out.push('<div class="dcb-geom-box" data-act="geom-drag" data-i="' + i + '" style="left:' + (g.x * 100) + '%;top:' + (g.y * 100) + '%;width:' + (g.w * 100) + '%;height:' + (g.h * 100) + '%;"><span class="dcb-geom-label">' + escapeHtml(f.label || f.key) + '</span></div>');
+      var hint = resolveFieldHint(form, f, i);
+      if (Number(hint.page_number || 1) !== Number(page.page_number || 1)) return;
+      var g = hint.geometry;
+      out.push('<div class="dcb-geom-box" data-act="geom-drag" data-i="' + i + '" data-page="' + Number(page.page_number || 1) + '" style="left:' + (g.x * 100) + '%;top:' + (g.y * 100) + '%;width:' + (g.w * 100) + '%;height:' + (g.h * 100) + '%;"><span class="dcb-geom-label">' + escapeHtml(f.label || f.key) + '</span><span class="dcb-geom-resize" data-act="geom-resize" data-i="' + i + '" data-page="' + Number(page.page_number || 1) + '"></span></div>');
     });
     out.push('</div></div>');
-    out.push('<p class="description">Drag boxes to reposition fields over the scan. Hard stops/validation still apply to field values.</p>');
+    out.push('<p class="description">Drag to move. Drag bottom-right corner to resize. Save Builder when alignment looks right.</p>');
     return out.join('');
   }
 
@@ -614,7 +979,10 @@
       return;
     }
 
-    var form = ensureFormShape(state.forms[selected]);
+    var form = ensureRelationalIntegrity(ensureFormShape(state.forms[selected]));
+    state.forms[selected] = form;
+    var previewPage = Number(state.previewPageByForm[selected] || 1);
+    var layoutPage = Number(state.layoutPageByForm[selected] || 1);
     var localIssues = validateForm(form);
     var remoteValidation = state.serverValidation[selected] || null;
     var issues = {
@@ -630,7 +998,7 @@
     }
     html.push('<div class="dcb-form-header"><label>Form Key<input type="text" data-act="set-key" value="' + escapeHtml(selected) + '"/></label><label>Label<input type="text" data-act="set-label" value="' + escapeHtml(form.label || '') + '"/></label><label>Recipients<input type="text" data-act="set-recipients" value="' + escapeHtml(form.recipients || '') + '"/></label><button type="button" class="button" data-act="duplicate-form">Duplicate</button><button type="button" class="button button-link-delete" data-act="delete-form">Delete</button></div>');
 
-    html.push('<section class="dcb-panel"><h3>Validation</h3>');
+    html.push('<section class="dcb-panel"><h3>Validation</h3><p class="dcb-builder-quick-actions"><button type="button" class="button" data-act="repair-structure">Auto-Fix Structure</button> <button type="button" class="button" data-act="rebuild-from-fields">Rebuild Step/Section/Nodes</button></p>');
     if (remoteValidation && remoteValidation.loading) {
       html.push('<p class="description">Validating with server rules…</p>');
     }
@@ -648,7 +1016,13 @@
     }
     html.push('</section>');
 
-    html.push('<section class="dcb-panel"><h3>Fields</h3><p class="dcb-template-buttons">' + fieldTemplateButtons() + ' <button type="button" class="button" data-act="field-add">Add Blank Field</button></p>');
+    html.push(renderCanvasPanel(form, Number(state.canvasSelectionByForm[selected] || -1)));
+    html.push(renderSectionLanesPanel(form));
+
+    html.push('<section class="dcb-panel"><h3>Fields</h3><p class="description">Start here: add fields, then use Auto-Fix if you see validation errors.</p><p class="description"><strong>Drag & drop order</strong> (quick):</p>' + renderSortList('fields', form.fields, function (f, idx) {
+      var row = f || {};
+      return (idx + 1) + '. ' + String(row.label || row.key || ('Field ' + (idx + 1))) + ' [' + String(row.type || 'text') + ']';
+    }) + '<p class="dcb-template-buttons">' + fieldTemplateButtons() + ' <button type="button" class="button" data-act="field-add">Add Blank Field</button></p>');
     html.push('<table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Type</th><th>Required</th><th>Actions</th></tr></thead><tbody>');
     asArray(form.fields).forEach(function (field, i) {
       html.push('<tr><td><input type="text" data-act="field-key" data-i="' + i + '" value="' + escapeHtml(field.key || '') + '"/></td><td><input type="text" data-act="field-label" data-i="' + i + '" value="' + escapeHtml(field.label || '') + '"/></td><td><select data-act="field-type" data-i="' + i + '">' + typeOptions(field.type || 'text') + '</select></td><td><input type="checkbox" data-act="field-required" data-i="' + i + '" ' + (field.required ? 'checked' : '') + '/></td><td><button type="button" class="button" data-act="field-insert-above" data-i="' + i + '">Insert Above</button> <button type="button" class="button" data-act="field-insert-below" data-i="' + i + '">Insert Below</button> <button type="button" class="button-link-delete" data-act="field-delete" data-i="' + i + '">Delete</button></td></tr>');
@@ -657,13 +1031,19 @@
     if (!asArray(form.fields).length) html.push('<tr><td colspan="5">No fields yet.</td></tr>');
     html.push('</tbody></table></section>');
 
-    html.push('<section class="dcb-panel"><h3>Sections</h3><table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Field Keys (comma)</th><th></th></tr></thead><tbody>');
+    html.push('<section class="dcb-panel"><h3>Sections</h3><p class="description"><strong>Drag & drop order</strong> (quick):</p>' + renderSortList('sections', form.sections, function (s, idx) {
+      var row = s || {};
+      return (idx + 1) + '. ' + String(row.label || row.key || ('Section ' + (idx + 1)));
+    }) + '<table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Field Keys (comma)</th><th></th></tr></thead><tbody>');
     asArray(form.sections).forEach(function (s, i) {
       html.push('<tr><td><input type="text" data-act="section-key" data-i="' + i + '" value="' + escapeHtml(s.key || '') + '"/></td><td><input type="text" data-act="section-label" data-i="' + i + '" value="' + escapeHtml(s.label || '') + '"/></td><td><input type="text" data-act="section-fields" data-i="' + i + '" value="' + escapeHtml(asArray(s.field_keys).join(', ')) + '"/></td><td><button type="button" class="button-link-delete" data-act="section-delete" data-i="' + i + '">Delete</button></td></tr>');
     });
     html.push('</tbody></table><p><button type="button" class="button" data-act="section-add">Add Section</button></p></section>');
 
-    html.push('<section class="dcb-panel"><h3>Steps / Pages</h3><table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Section Keys (comma)</th><th></th></tr></thead><tbody>');
+    html.push('<section class="dcb-panel"><h3>Steps / Pages</h3><p class="description"><strong>Drag & drop order</strong> (quick):</p>' + renderSortList('steps', form.steps, function (s, idx) {
+      var row = s || {};
+      return (idx + 1) + '. ' + String(row.label || row.key || ('Step ' + (idx + 1)));
+    }) + '<table class="widefat striped"><thead><tr><th>Key</th><th>Label</th><th>Section Keys (comma)</th><th></th></tr></thead><tbody>');
     asArray(form.steps).forEach(function (s, i) {
       html.push('<tr><td><input type="text" data-act="step-key" data-i="' + i + '" value="' + escapeHtml(s.key || '') + '"/></td><td><input type="text" data-act="step-label" data-i="' + i + '" value="' + escapeHtml(s.label || '') + '"/></td><td><input type="text" data-act="step-sections" data-i="' + i + '" value="' + escapeHtml(asArray(s.section_keys).join(', ')) + '"/></td><td><button type="button" class="button-link-delete" data-act="step-delete" data-i="' + i + '">Delete</button></td></tr>');
     });
@@ -698,8 +1078,8 @@
 
     var previewPayload = state.serverPreview[selected] || null;
     html.push('<section class="dcb-panel"><h3>Preview</h3>' + previewHtmlFromPayload(previewPayload, form) + '</section>');
-    html.push('<section class="dcb-panel"><h3>Front-end Preview (Step 1)</h3><p class="description">Approximate portal rendering for the first step/page.</p>' + frontEndPreviewHtml(form) + '</section>');
-    html.push('<section class="dcb-panel"><h3>Layout Positioning (Drag)</h3>' + layoutEditorHtml(form) + '</section>');
+    html.push('<section class="dcb-panel"><h3>Front-end Preview</h3><div class="dcb-layout-controls"><label>Page <select data-act="preview-page">' + getPageOptions(form).map(function (p) { return '<option value="' + Number(p.page_number || 1) + '" ' + (Number(p.page_number || 1) === previewPage ? 'selected' : '') + '>' + escapeHtml(p.label) + '</option>'; }).join('') + '</select></label></div><p class="description">Overlay preview should match portal rendering on the selected page.</p>' + frontEndOverlayPreviewHtml(form, previewPage) + '<div class="dcb-preview-fallback">' + frontEndPreviewHtml(form) + '</div></section>');
+    html.push('<section class="dcb-panel"><h3>Layout Positioning (Drag)</h3>' + layoutEditorHtml(form, layoutPage) + '</section>');
     html.push('</main></div>');
     $root.html(html.join(''));
   }
@@ -839,6 +1219,12 @@
       ocrDraftPayload: null,
       ocrReviewRows: [],
       dragState: null,
+      sortDrag: null,
+      canvasDrag: null,
+      laneDrag: null,
+      canvasSelectionByForm: {},
+      previewPageByForm: {},
+      layoutPageByForm: {},
       serverValidation: {},
       serverPreview: {},
       serverValidationFingerprint: {},
@@ -873,7 +1259,7 @@
       rerender();
     });
 
-    $builderRoot.on('mousedown', '[data-act="geom-drag"]', function (e) {
+    $builderRoot.on('mousedown', '[data-act="geom-drag"], [data-act="geom-resize"]', function (e) {
       var form = resolveContext(state); if (!form) return;
       var i = Number($(this).data('i'));
       if (i < 0 || i >= asArray(form.fields).length) return;
@@ -888,13 +1274,15 @@
       var px = (g.x * ow);
       var py = (g.y * oh);
       state.dragState = {
+        mode: String($(this).data('act') || 'geom-drag') === 'geom-resize' ? 'resize' : 'move',
         i: i,
+        pageNumber: Math.max(1, Number($(this).data('page') || 1)),
         startMouseX: e.pageX,
         startMouseY: e.pageY,
         startX: g.x,
         startY: g.y,
-        width: g.w,
-        height: g.h,
+        startW: g.w,
+        startH: g.h,
         overlayLeft: off.left,
         overlayTop: off.top,
         overlayWidth: ow,
@@ -902,6 +1290,474 @@
         $node: $(this)
       };
       e.preventDefault();
+    });
+
+    $builderRoot.on('dragstart', '.dcb-sort-item', function (e) {
+      var kind = String($(this).data('sortKind') || '');
+      var idx = Number($(this).data('sortIndex'));
+      if (!kind || idx < 0) return;
+      state.sortDrag = { kind: kind, from: idx };
+      $(this).addClass('is-dragging');
+      var dt = e.originalEvent && e.originalEvent.dataTransfer;
+      if (dt) {
+        dt.effectAllowed = 'move';
+        dt.setData('text/plain', kind + ':' + idx);
+      }
+    });
+
+    $builderRoot.on('dragend', '.dcb-sort-item', function () {
+      state.sortDrag = null;
+      $builderRoot.find('.dcb-sort-item').removeClass('is-dragging is-drop-target');
+    });
+
+    $builderRoot.on('dragover', '.dcb-sort-item', function (e) {
+      if (!state.sortDrag) return;
+      e.preventDefault();
+      $builderRoot.find('.dcb-sort-item').removeClass('is-drop-target');
+      $(this).addClass('is-drop-target');
+      var dt = e.originalEvent && e.originalEvent.dataTransfer;
+      if (dt) dt.dropEffect = 'move';
+    });
+
+    $builderRoot.on('drop', '.dcb-sort-item', function (e) {
+      if (!state.sortDrag) return;
+      e.preventDefault();
+      var form = resolveContext(state); if (!form) return;
+      var targetKind = String($(this).data('sortKind') || '');
+      var toIdx = Number($(this).data('sortIndex'));
+      if (targetKind !== state.sortDrag.kind || toIdx < 0) return;
+      if (targetKind === 'fields') form.fields = moveListItem(asArray(form.fields), state.sortDrag.from, toIdx);
+      if (targetKind === 'sections') form.sections = moveListItem(asArray(form.sections), state.sortDrag.from, toIdx);
+      if (targetKind === 'steps') form.steps = moveListItem(asArray(form.steps), state.sortDrag.from, toIdx);
+      state.sortDrag = null;
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="canvas-select-node"]', function () {
+      if (!state.selectedKey) return;
+      var idx = Number($(this).data('nodeIndex'));
+      state.canvasSelectionByForm[state.selectedKey] = idx >= 0 ? idx : -1;
+      rerender();
+    });
+
+    $builderRoot.on('dragstart', '.dcb-canvas-node', function (e) {
+      var idx = Number($(this).data('nodeIndex'));
+      if (idx < 0) return;
+      state.canvasDrag = { from: idx };
+      $(this).addClass('is-dragging');
+      var dt = e.originalEvent && e.originalEvent.dataTransfer;
+      if (dt) {
+        dt.effectAllowed = 'move';
+        dt.setData('text/plain', String(idx));
+      }
+    });
+
+    $builderRoot.on('dragend', '.dcb-canvas-node', function () {
+      state.canvasDrag = null;
+      $builderRoot.find('.dcb-canvas-node').removeClass('is-dragging is-drop-target');
+    });
+
+    $builderRoot.on('dragover', '.dcb-canvas-node', function (e) {
+      if (!state.canvasDrag) return;
+      e.preventDefault();
+      $builderRoot.find('.dcb-canvas-node').removeClass('is-drop-target');
+      $(this).addClass('is-drop-target');
+    });
+
+    $builderRoot.on('drop', '.dcb-canvas-node', function (e) {
+      if (!state.canvasDrag) return;
+      e.preventDefault();
+      var form = resolveContext(state); if (!form) return;
+      var to = Number($(this).data('nodeIndex'));
+      if (to < 0) return;
+      form.document_nodes = moveListItem(asArray(form.document_nodes), state.canvasDrag.from, to);
+      if (state.selectedKey) state.canvasSelectionByForm[state.selectedKey] = to;
+      state.canvasDrag = null;
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="canvas-add-field"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      var fType = slugify(String($(this).data('ftype') || 'text')) || 'text';
+      var fieldKey = ensureUniqueFieldKey(form, 'field_' + (asArray(form.fields).length + 1));
+      var field = { key: fieldKey, label: 'New ' + fType + ' field', type: fType, required: false, conditions: [] };
+      form.fields.push(field);
+      form.document_nodes.push({ type: 'field', field_key: fieldKey });
+      ensureRelationalIntegrity(form);
+      state.canvasSelectionByForm[state.selectedKey] = Math.max(0, asArray(form.document_nodes).length - 1);
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="canvas-add-block"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      var bType = slugify(String($(this).data('btype') || 'paragraph')) || 'paragraph';
+      var blockId = ensureUniqueBlockId(form, 'blk_' + (asArray(form.template_blocks).length + 1));
+      var block = { block_id: blockId, type: bType, text: bType === 'heading' ? 'Section Heading' : 'Paragraph text' };
+      form.template_blocks.push(block);
+      form.document_nodes.push({ type: 'block', block_id: blockId });
+      state.canvasSelectionByForm[state.selectedKey] = Math.max(0, asArray(form.document_nodes).length - 1);
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="canvas-delete-node"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      var idx = Number($(this).data('nodeIndex'));
+      var nodes = asArray(form.document_nodes);
+      if (idx < 0 || idx >= nodes.length) return;
+      var node = nodes[idx] || {};
+      nodes.splice(idx, 1);
+      form.document_nodes = nodes;
+
+      if (node.type === 'field') {
+        var key = String(node.field_key || '');
+        var stillUsed = nodes.some(function (n) { return String((n && n.type) || '') === 'field' && String((n && n.field_key) || '') === key; });
+        if (!stillUsed) {
+          form.fields = asArray(form.fields).filter(function (f) { return String((f && f.key) || '') !== key; });
+          asArray(form.sections).forEach(function (s) {
+            s.field_keys = asArray(s.field_keys).filter(function (fk) { return String(fk || '') !== key; });
+          });
+        }
+      }
+      if (node.type === 'block') {
+        var bid = String(node.block_id || '');
+        var blockUsed = nodes.some(function (n) { return String((n && n.type) || '') === 'block' && String((n && n.block_id) || '') === bid; });
+        if (!blockUsed) {
+          form.template_blocks = asArray(form.template_blocks).filter(function (b) { return String((b && b.block_id) || '') !== bid; });
+        }
+      }
+
+      ensureRelationalIntegrity(form);
+      state.canvasSelectionByForm[state.selectedKey] = Math.max(-1, Math.min(idx, asArray(form.document_nodes).length - 1));
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="canvas-duplicate-node"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      var idx = Number($(this).data('nodeIndex'));
+      var nodes = asArray(form.document_nodes);
+      if (idx < 0 || idx >= nodes.length) return;
+      var node = nodes[idx] || {};
+      var copyNode = null;
+      if (node.type === 'field') {
+        var srcField = asArray(form.fields).find(function (f) { return String((f && f.key) || '') === String(node.field_key || ''); }) || null;
+        if (!srcField) return;
+        var nextKey = ensureUniqueFieldKey(form, String(srcField.key || 'field') + '_copy');
+        var copiedField = clone(srcField);
+        copiedField.key = nextKey;
+        copiedField.label = String(copiedField.label || nextKey) + ' (Copy)';
+        form.fields.push(copiedField);
+        copyNode = { type: 'field', field_key: nextKey };
+      } else if (node.type === 'block') {
+        var srcBlock = asArray(form.template_blocks).find(function (b) { return String((b && b.block_id) || '') === String(node.block_id || ''); }) || null;
+        if (!srcBlock) return;
+        var nextBlockId = ensureUniqueBlockId(form, String(srcBlock.block_id || 'blk') + '_copy');
+        var copiedBlock = clone(srcBlock);
+        copiedBlock.block_id = nextBlockId;
+        form.template_blocks.push(copiedBlock);
+        copyNode = { type: 'block', block_id: nextBlockId };
+      }
+      if (!copyNode) return;
+      nodes.splice(idx + 1, 0, copyNode);
+      form.document_nodes = nodes;
+      ensureRelationalIntegrity(form);
+      state.canvasSelectionByForm[state.selectedKey] = idx + 1;
+      rerender();
+    });
+
+    $builderRoot.on('input change', '[data-act="canvas-field-key"], [data-act="canvas-field-label"], [data-act="canvas-field-type"], [data-act="canvas-field-required"], [data-act="canvas-block-id"], [data-act="canvas-block-type"], [data-act="canvas-block-text"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      var idx = Number($(this).data('nodeIndex'));
+      var node = asArray(form.document_nodes)[idx] || null;
+      if (!node) return;
+      var act = String($(this).data('act') || '');
+      var val = $(this).is(':checkbox') ? $(this).is(':checked') : String($(this).val() || '');
+
+      if (node.type === 'field') {
+        var field = asArray(form.fields).find(function (f) { return String((f && f.key) || '') === String(node.field_key || ''); }) || null;
+        if (!field) return;
+        if (act === 'canvas-field-key') {
+          var desired = ensureUniqueFieldKey(form, val || 'field');
+          var oldKey = String(field.key || '');
+          field.key = desired;
+          node.field_key = desired;
+          asArray(form.sections).forEach(function (s) {
+            s.field_keys = asArray(s.field_keys).map(function (fk) { return String(fk || '') === oldKey ? desired : fk; });
+          });
+        }
+        if (act === 'canvas-field-label') field.label = val;
+        if (act === 'canvas-field-type') field.type = slugify(val) || 'text';
+        if (act === 'canvas-field-required') field.required = !!val;
+      }
+
+      if (node.type === 'block') {
+        var block = asArray(form.template_blocks).find(function (b) { return String((b && b.block_id) || '') === String(node.block_id || ''); }) || null;
+        if (!block) return;
+        if (act === 'canvas-block-id') {
+          var nextId = ensureUniqueBlockId(form, val || 'blk');
+          block.block_id = nextId;
+          node.block_id = nextId;
+        }
+        if (act === 'canvas-block-type') block.type = slugify(val) || 'paragraph';
+        if (act === 'canvas-block-text') block.text = val;
+      }
+
+      rerender();
+    });
+
+    $builderRoot.on('input change', '[data-act="lane-step-label"], [data-act="lane-step-key"], [data-act="lane-section-label"], [data-act="lane-section-key"]', function () {
+      var form = resolveContext(state); if (!form) return;
+      var act = String($(this).data('act') || '');
+      var stepIdx = Number($(this).data('stepIndex'));
+      var step = asArray(form.steps)[stepIdx] || null;
+      var val = String($(this).val() || '');
+      if (!step) return;
+
+      if (act === 'lane-step-label') {
+        step.label = val;
+        rerender();
+        return;
+      }
+
+      if (act === 'lane-step-key') {
+        var nextStepKey = slugify(val || ('step_' + (stepIdx + 1))) || ('step_' + (stepIdx + 1));
+        var nStep = 2;
+        while (asArray(form.steps).some(function (s, i) { return i !== stepIdx && String((s && s.key) || '') === nextStepKey; })) {
+          nextStepKey = slugify(val || 'step') + '_' + nStep;
+          nStep += 1;
+        }
+        step.key = nextStepKey;
+        rerender();
+        return;
+      }
+
+      var sectionKey = String($(this).data('sectionKey') || '');
+      var section = asArray(form.sections).find(function (s) { return String((s && s.key) || '') === sectionKey; }) || null;
+      if (!section) return;
+
+      if (act === 'lane-section-label') {
+        section.label = val;
+        rerender();
+        return;
+      }
+
+      if (act === 'lane-section-key') {
+        var nextSectionKey = slugify(val || sectionKey) || sectionKey;
+        var nSection = 2;
+        while (asArray(form.sections).some(function (s) { return s !== section && String((s && s.key) || '') === nextSectionKey; })) {
+          nextSectionKey = slugify(val || 'section') + '_' + nSection;
+          nSection += 1;
+        }
+        var oldSectionKey = String(section.key || '');
+        section.key = nextSectionKey;
+        asArray(form.steps).forEach(function (st) {
+          st.section_keys = asArray(st.section_keys).map(function (sk) { return String(sk || '') === oldSectionKey ? nextSectionKey : sk; });
+        });
+        rerender();
+      }
+    });
+
+    $builderRoot.on('click', '[data-act="lane-delete-step"]', function () {
+      var form = resolveContext(state); if (!form) return;
+      var stepIdx = Number($(this).data('stepIndex'));
+      if (stepIdx < 0 || stepIdx >= asArray(form.steps).length) return;
+      if (!confirm('Delete this step?')) return;
+      var removed = asArray(form.steps).splice(stepIdx, 1)[0] || {};
+
+      var stillReferenced = {};
+      asArray(form.steps).forEach(function (st) {
+        asArray(st.section_keys).forEach(function (sk) {
+          sk = String(sk || '');
+          if (sk) stillReferenced[sk] = true;
+        });
+      });
+
+      var removedSectionKeys = asArray(removed.section_keys).map(String).filter(Boolean);
+      if (removedSectionKeys.length) {
+        form.sections = asArray(form.sections).filter(function (s) {
+          var key = String((s && s.key) || '');
+          if (!key) return true;
+          return removedSectionKeys.indexOf(key) < 0 || !!stillReferenced[key];
+        });
+      }
+
+      ensureRelationalIntegrity(form);
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="lane-delete-section"]', function () {
+      var form = resolveContext(state); if (!form) return;
+      var sectionKey = String($(this).data('sectionKey') || '');
+      if (!sectionKey) return;
+      if (!confirm('Delete this section?')) return;
+
+      form.sections = asArray(form.sections).filter(function (s) { return String((s && s.key) || '') !== sectionKey; });
+      asArray(form.steps).forEach(function (st) {
+        st.section_keys = asArray(st.section_keys).filter(function (sk) { return String(sk || '') !== sectionKey; });
+      });
+
+      ensureRelationalIntegrity(form);
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="lane-add-step"]', function () {
+      var form = resolveContext(state); if (!form) return;
+      var idx = asArray(form.steps).length + 1;
+      var sectionKey = slugify('section_' + idx);
+      while (asArray(form.sections).find(function (s) { return String((s && s.key) || '') === sectionKey; })) {
+        idx += 1;
+        sectionKey = slugify('section_' + idx);
+      }
+      form.sections.push({ key: sectionKey, label: 'Section ' + idx, field_keys: [] });
+      form.steps.push({ key: slugify('step_' + idx), label: 'Step ' + idx, section_keys: [sectionKey] });
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="lane-add-section"]', function () {
+      var form = resolveContext(state); if (!form) return;
+      var stepIdx = Number($(this).data('stepIndex'));
+      var step = asArray(form.steps)[stepIdx] || null;
+      if (!step) return;
+      var idx = asArray(form.sections).length + 1;
+      var sectionKey = slugify('section_' + idx);
+      while (asArray(form.sections).find(function (s) { return String((s && s.key) || '') === sectionKey; })) {
+        idx += 1;
+        sectionKey = slugify('section_' + idx);
+      }
+      form.sections.push({ key: sectionKey, label: 'Section ' + idx, field_keys: [] });
+      step.section_keys = asArray(step.section_keys);
+      step.section_keys.push(sectionKey);
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="lane-remove-field"]', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var form = resolveContext(state); if (!form) return;
+      var sectionKey = String($(this).data('sectionKey') || '');
+      var fieldKey = String($(this).data('fieldKey') || '');
+      var section = asArray(form.sections).find(function (s) { return String((s && s.key) || '') === sectionKey; }) || null;
+      if (!section || !fieldKey) return;
+      section.field_keys = asArray(section.field_keys).filter(function (fk) { return String(fk || '') !== fieldKey; });
+      ensureRelationalIntegrity(form);
+      rerender();
+    });
+
+    $builderRoot.on('dragstart', '[data-act="lane-drag-field"]', function (e) {
+      var fieldKey = String($(this).data('fieldKey') || '');
+      var fromSection = String($(this).data('fromSection') || '');
+      if (!fieldKey) return;
+      state.laneDrag = { fieldKey: fieldKey, fromSection: fromSection };
+      $(this).addClass('is-dragging');
+      var dt = e.originalEvent && e.originalEvent.dataTransfer;
+      if (dt) {
+        dt.effectAllowed = 'move';
+        dt.setData('text/plain', fieldKey);
+      }
+    });
+
+    $builderRoot.on('dragend', '[data-act="lane-drag-field"]', function () {
+      state.laneDrag = null;
+      $builderRoot.find('.dcb-lane-chip').removeClass('is-dragging');
+      $builderRoot.find('[data-act="lane-drop-zone"]').removeClass('is-drop-target');
+      $builderRoot.find('[data-act="lane-step-drop-zone"]').removeClass('is-drop-target');
+      $builderRoot.find('[data-act="lane-unassigned-drop-zone"]').removeClass('is-drop-target');
+    });
+
+    $builderRoot.on('dragover', '[data-act="lane-drop-zone"]', function (e) {
+      if (!state.laneDrag) return;
+      e.preventDefault();
+      $builderRoot.find('[data-act="lane-drop-zone"]').removeClass('is-drop-target');
+      $(this).addClass('is-drop-target');
+      var dt = e.originalEvent && e.originalEvent.dataTransfer;
+      if (dt) dt.dropEffect = 'move';
+    });
+
+    $builderRoot.on('dragover', '[data-act="lane-step-drop-zone"], [data-act="lane-unassigned-drop-zone"]', function (e) {
+      if (!state.laneDrag) return;
+      e.preventDefault();
+      $builderRoot.find('[data-act="lane-step-drop-zone"]').removeClass('is-drop-target');
+      $builderRoot.find('[data-act="lane-unassigned-drop-zone"]').removeClass('is-drop-target');
+      $(this).addClass('is-drop-target');
+      var dt = e.originalEvent && e.originalEvent.dataTransfer;
+      if (dt) dt.dropEffect = 'move';
+    });
+
+    $builderRoot.on('drop', '[data-act="lane-drop-zone"]', function (e) {
+      if (!state.laneDrag) return;
+      e.preventDefault();
+      var form = resolveContext(state); if (!form) return;
+      var sectionKey = String($(this).data('sectionKey') || '');
+      var fieldKey = String(state.laneDrag.fieldKey || '');
+      if (!sectionKey || !fieldKey) return;
+
+      asArray(form.sections).forEach(function (s) {
+        s.field_keys = asArray(s.field_keys).filter(function (fk) { return String(fk || '') !== fieldKey; });
+      });
+
+      var targetSection = asArray(form.sections).find(function (s) { return String((s && s.key) || '') === sectionKey; }) || null;
+      if (!targetSection) return;
+      targetSection.field_keys = asArray(targetSection.field_keys);
+      if (targetSection.field_keys.indexOf(fieldKey) < 0) {
+        targetSection.field_keys.push(fieldKey);
+      }
+
+      ensureRelationalIntegrity(form);
+      state.laneDrag = null;
+      rerender();
+    });
+
+    $builderRoot.on('drop', '[data-act="lane-step-drop-zone"]', function (e) {
+      if (!state.laneDrag) return;
+      e.preventDefault();
+      var form = resolveContext(state); if (!form) return;
+      var stepIdx = Number($(this).data('stepIndex'));
+      var step = asArray(form.steps)[stepIdx] || null;
+      var fieldKey = String(state.laneDrag.fieldKey || '');
+      if (!step || !fieldKey) return;
+
+      asArray(form.sections).forEach(function (s) {
+        s.field_keys = asArray(s.field_keys).filter(function (fk) { return String(fk || '') !== fieldKey; });
+      });
+
+      step.section_keys = asArray(step.section_keys).map(String).filter(Boolean);
+      var targetSectionKey = String(step.section_keys[0] || '');
+      var targetSection = targetSectionKey ? (asArray(form.sections).find(function (s) { return String((s && s.key) || '') === targetSectionKey; }) || null) : null;
+      if (!targetSection) {
+        var idx = asArray(form.sections).length + 1;
+        var sectionKey = slugify('section_' + idx);
+        while (asArray(form.sections).find(function (s) { return String((s && s.key) || '') === sectionKey; })) {
+          idx += 1;
+          sectionKey = slugify('section_' + idx);
+        }
+        targetSection = { key: sectionKey, label: 'Section ' + idx, field_keys: [] };
+        form.sections.push(targetSection);
+        step.section_keys.push(sectionKey);
+      }
+
+      targetSection.field_keys = asArray(targetSection.field_keys);
+      if (targetSection.field_keys.indexOf(fieldKey) < 0) {
+        targetSection.field_keys.push(fieldKey);
+      }
+
+      ensureRelationalIntegrity(form);
+      state.laneDrag = null;
+      rerender();
+    });
+
+    $builderRoot.on('drop', '[data-act="lane-unassigned-drop-zone"]', function (e) {
+      if (!state.laneDrag) return;
+      e.preventDefault();
+      var form = resolveContext(state); if (!form) return;
+      var fieldKey = String(state.laneDrag.fieldKey || '');
+      if (!fieldKey) return;
+
+      asArray(form.sections).forEach(function (s) {
+        s.field_keys = asArray(s.field_keys).filter(function (fk) { return String(fk || '') !== fieldKey; });
+      });
+
+      ensureRelationalIntegrity(form);
+      state.laneDrag = null;
+      rerender();
     });
 
     $(document).on('mousemove.dcbGeom', function (e) {
@@ -913,18 +1769,28 @@
 
       var dx = (e.pageX - d.startMouseX) / Math.max(1, d.overlayWidth);
       var dy = (e.pageY - d.startMouseY) / Math.max(1, d.overlayHeight);
-      var x = Math.max(0, Math.min(1 - d.width, d.startX + dx));
-      var y = Math.max(0, Math.min(1 - d.height, d.startY + dy));
+      var x = d.startX;
+      var y = d.startY;
+      var w = d.startW;
+      var h = d.startH;
+      if (d.mode === 'resize') {
+        w = Math.max(0.08, Math.min(1 - d.startX, d.startW + dx));
+        h = Math.max(0.03, Math.min(1 - d.startY, d.startH + dy));
+      } else {
+        x = Math.max(0, Math.min(1 - d.startW, d.startX + dx));
+        y = Math.max(0, Math.min(1 - d.startH, d.startY + dy));
+      }
       field.ocr_meta = field.ocr_meta && typeof field.ocr_meta === 'object' ? field.ocr_meta : {};
       field.ocr_meta.geometry = {
         x: x,
         y: y,
-        w: d.width,
-        h: d.height,
+        w: w,
+        h: h,
         unit: 'page_ratio'
       };
+      field.ocr_meta.page_number = Math.max(1, Number(d.pageNumber || 1));
 
-      d.$node.css({ left: (x * 100) + '%', top: (y * 100) + '%' });
+      d.$node.css({ left: (x * 100) + '%', top: (y * 100) + '%', width: (w * 100) + '%', height: (h * 100) + '%' });
     });
 
     $(document).on('mouseup.dcbGeom', function () {
@@ -935,11 +1801,15 @@
 
     $builderRoot.on('click', '[data-act="duplicate-form"]', function () {
       if (!state.selectedKey || !state.forms[state.selectedKey]) return;
+      var sourceKey = state.selectedKey;
       var next = slugify(state.selectedKey + '_copy');
       var n = 2;
       while (state.forms[next]) { next = slugify(state.selectedKey + '_copy_' + n); n += 1; }
-      state.forms[next] = clone(state.forms[state.selectedKey]);
+      state.forms[next] = clone(state.forms[sourceKey]);
       state.selectedKey = next;
+      state.canvasSelectionByForm[next] = Number(state.canvasSelectionByForm[sourceKey] || -1);
+      state.previewPageByForm[next] = 1;
+      state.layoutPageByForm[next] = 1;
       rerender();
     });
 
@@ -947,8 +1817,68 @@
       if (!state.selectedKey || !state.forms[state.selectedKey]) return;
       if (!confirm('Delete form "' + state.selectedKey + '"?')) return;
       delete state.forms[state.selectedKey];
+      delete state.canvasSelectionByForm[state.selectedKey];
+      delete state.previewPageByForm[state.selectedKey];
+      delete state.layoutPageByForm[state.selectedKey];
       state.selectedKey = '';
       rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="repair-structure"]', function () {
+      var form = resolveContext(state); if (!form) return;
+      ensureRelationalIntegrity(form);
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="rebuild-from-fields"]', function () {
+      var form = resolveContext(state); if (!form) return;
+      if (!confirm('Rebuild sections/steps/document nodes from current field order?')) return;
+      autoBuildDocumentFromFields(form);
+      rerender();
+    });
+
+    $builderRoot.on('change', '[data-act="preview-page"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      state.previewPageByForm[state.selectedKey] = Math.max(1, Number($(this).val() || 1));
+      rerender();
+    });
+
+    $builderRoot.on('change', '[data-act="layout-page"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      state.layoutPageByForm[state.selectedKey] = Math.max(1, Number($(this).val() || 1));
+      rerender();
+    });
+
+    $builderRoot.on('click', '[data-act="attach-bg"]', function () {
+      var form = resolveContext(state); if (!form || !state.selectedKey) return;
+      var fileInput = document.getElementById('dcb-ocr-seed-file');
+      if (!fileInput || !fileInput.files || !fileInput.files.length) {
+        alert('Choose a seed PDF/image at the top first.');
+        return;
+      }
+      var fd = new FormData();
+      fd.append('action', 'dcb_builder_attach_background');
+      fd.append('nonce', String($ocrRoot.data('ocrNonce') || ''));
+      fd.append('ocr_seed_file', fileInput.files[0]);
+
+      var $status = $('<p class="description">Attaching background…</p>');
+      $(this).closest('.dcb-panel').find('.dcb-layout-status').remove();
+      $(this).closest('.dcb-panel').append($status.addClass('dcb-layout-status'));
+
+      $.ajax({ url: cfg.ajaxUrl, method: 'POST', data: fd, processData: false, contentType: false }).done(function (res) {
+        if (!res || !res.success || !res.data || !res.data.background) {
+          alert('Could not attach scan background.');
+          rerender();
+          return;
+        }
+        form.digital_twin_background = res.data.background;
+        state.previewPageByForm[state.selectedKey] = 1;
+        state.layoutPageByForm[state.selectedKey] = 1;
+        rerender();
+      }).fail(function () {
+        alert('Could not attach scan background.');
+        rerender();
+      });
     });
 
     $builderRoot.on('click', '[data-act="field-add"]', function () {
@@ -1118,6 +2048,9 @@
       if (!parsed) return alert('Invalid JSON.');
       state.forms = parsed;
       state.selectedKey = Object.keys(parsed)[0] || '';
+      state.canvasSelectionByForm = {};
+      state.previewPageByForm = {};
+      state.layoutPageByForm = {};
       rerender();
     });
 
@@ -1126,6 +2059,9 @@
       if (!parsed) return alert('Invalid JSON. Please fix syntax and try again.');
       state.forms = parsed;
       state.selectedKey = Object.keys(parsed)[0] || '';
+      state.canvasSelectionByForm = {};
+      state.previewPageByForm = {};
+      state.layoutPageByForm = {};
       rerender();
     });
 

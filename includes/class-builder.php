@@ -8,6 +8,7 @@ final class DCB_Builder {
     public static function init(): void {
         add_action('admin_post_dcb_save_builder', array(__CLASS__, 'save_builder'));
         add_action('wp_ajax_dcb_builder_ocr_seed_extract', array(__CLASS__, 'ocr_seed_extract_ajax'));
+        add_action('wp_ajax_dcb_builder_attach_background', array(__CLASS__, 'attach_background_ajax'));
         add_action('wp_ajax_dcb_builder_validate_schema', array(__CLASS__, 'validate_schema_ajax'));
     }
 
@@ -204,6 +205,51 @@ final class DCB_Builder {
             'warnings' => array_values((array) ($validation['warnings'] ?? array())),
             'preview' => $preview,
         ));
+    }
+
+    public static function attach_background_ajax(): void {
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_MANAGE_FORMS)) {
+            wp_send_json_error(array('message' => 'Unauthorized'), 403);
+        }
+        if (!DCB_Permissions::can(DCB_Permissions::CAP_RUN_OCR_TOOLS)) {
+            wp_send_json_error(array('message' => 'OCR tools capability is required.'), 403);
+        }
+
+        check_ajax_referer('dcb_builder_ocr_seed_extract', 'nonce');
+
+        if (!isset($_FILES['ocr_seed_file']) || !is_array($_FILES['ocr_seed_file'])) {
+            wp_send_json_error(array('message' => 'Please choose a seed file.'), 422);
+        }
+
+        $seed_file = $_FILES['ocr_seed_file'];
+        $seed_error = (int) ($seed_file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($seed_error !== UPLOAD_ERR_OK) {
+            wp_send_json_error(array('message' => 'Background upload failed.'), 422);
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        $uploaded = wp_handle_upload($seed_file, array('test_form' => false, 'mimes' => dcb_upload_allowed_mimes()));
+        if (!is_array($uploaded) || isset($uploaded['error'])) {
+            wp_send_json_error(array('message' => 'Background upload failed. Please check file type and size.'), 422);
+        }
+
+        $path = (string) ($uploaded['file'] ?? '');
+        $mime = (string) ($uploaded['type'] ?? '');
+        try {
+            $bg = self::digital_twin_background_from_upload($path, $mime, (string) ($uploaded['url'] ?? ''));
+            if ($path !== '' && file_exists($path)) {
+                @unlink($path);
+            }
+            if (empty($bg)) {
+                wp_send_json_error(array('message' => 'Could not generate scan background from this file.'), 422);
+            }
+            wp_send_json_success(array('background' => $bg));
+        } catch (\Throwable $e) {
+            if ($path !== '' && file_exists($path)) {
+                @unlink($path);
+            }
+            wp_send_json_error(array('message' => 'Could not generate scan background.'), 500);
+        }
     }
 
     public static function save_builder(): void {
