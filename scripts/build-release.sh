@@ -40,9 +40,14 @@ mkdir -p "$STAGE_DIR"
 rsync -a \
   --exclude='.git/' \
   --exclude='.github/' \
+  --exclude='.venv/' \
+  --exclude='venv/' \
+  --exclude='env/' \
+  --exclude='node_modules/' \
   --exclude='.DS_Store' \
   --exclude='tests/' \
   --exclude='fixtures/' \
+  --exclude='private-fixtures/' \
   --exclude='reports/' \
   --exclude='docs/' \
   --exclude='scripts/' \
