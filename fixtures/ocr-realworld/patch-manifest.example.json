@@ -3,6 +3,8 @@
   "notes": "Optional patch replay manifest. Use --patch-manifest=<path> and --evaluate-patches to compare baseline vs reviewer-corrected runs.",
   "case_patches": {
     "scanned_pdf_intake": {
+      "patch_primary_category": "false_positive_removal",
+      "patch_categories": ["false_positive_removal"],
       "candidate_fields": [
         {
           "field_label": "Patient Name",
@@ -31,6 +33,15 @@
           "suggested_type": "text",
           "decision": "accept",
           "confidence_bucket": "medium"
+        },
+        {
+          "field_label": "Authorization paragraph fragment",
+          "suggested_key": "authorization_paragraph_fragment",
+          "suggested_type": "text",
+          "decision": "reject",
+          "confidence_bucket": "low",
+          "patch_primary_category": "false_positive_removal",
+          "patch_category": "false_positive_removal"
         }
       ]
     }

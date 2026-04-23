@@ -555,6 +555,29 @@ final class DCB_OCR {
             }
             echo '</tbody></table>';
         }
+        if (is_array($bridge_last) && !empty($bridge_last['draft_output']['delta']) && is_array($bridge_last['draft_output']['delta'])) {
+            $draft_delta = $bridge_last['draft_output']['delta'];
+            echo '<h4 style="margin-top:18px;">Latest Draft Output Deltas</h4>';
+            echo '<table class="widefat striped" style="max-width:920px"><tbody>';
+            foreach (array(
+                'generated_field_count' => 'Generated Field Count',
+                'grouped_control_projection_quality' => 'Grouped Control Projection Quality',
+                'semantic_hard_stop_generation_coverage' => 'Semantic Hard-Stop Generation Coverage',
+                'patched_graph_to_draft_consistency' => 'Patched Graph-to-Draft Consistency',
+                'builder_draft_cleanup_burden_proxy' => 'Builder Draft Cleanup Burden Proxy',
+            ) as $metric_key => $metric_label) {
+                if (!isset($draft_delta[$metric_key])) {
+                    continue;
+                }
+                $val = is_numeric($draft_delta[$metric_key]) ? round((float) $draft_delta[$metric_key], 4) : $draft_delta[$metric_key];
+                echo '<tr><th style="width:280px">' . esc_html($metric_label) . '</th><td>' . esc_html((string) $val) . '</td></tr>';
+            }
+            if (!empty($bridge_last['downstream_draft_regenerated'])) {
+                $field_count = max(0, (int) ($bridge_last['downstream_draft_field_count'] ?? 0));
+                echo '<tr><th>Downstream Draft Regenerated</th><td>yes (fields=' . esc_html((string) $field_count) . ')</td></tr>';
+            }
+            echo '</tbody></table>';
+        }
         if (is_array($bridge_last) && !empty($bridge_last['entities']) && is_array($bridge_last['entities'])) {
             echo '<h4 style="margin-top:18px;">Latest Entity Snapshot</h4>';
             echo '<p class="description">Snapshot returned by the last bridge validate/apply action for the selected stable IDs.</p>';

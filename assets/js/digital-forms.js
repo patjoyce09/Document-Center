@@ -343,6 +343,103 @@
     return inSection;
   }
 
+  var priorityHardStopTypes = {
+    approval_block_incomplete: true,
+    signature_date_pair_missing: true,
+    checkbox_group_incomplete: true,
+    demographic_block_incomplete: true,
+    sparse_form_critical_field_set_missing_field: true
+  };
+
+  function normalizeHardStopRuleType(type) {
+    var t = slugify(type || '');
+    if (t === 'required_demographic_missing') return 'demographic_block_incomplete';
+    if (t === 'required_sparse_critical_missing') return 'sparse_form_critical_field_set_missing_field';
+    return t;
+  }
+
+  function evaluateHardStopCondition(condition, values) {
+    var row = asObject(condition);
+    var field = slugify(row.field || '');
+    if (!field) return false;
+    var operator = slugify(row.operator || 'eq') || 'eq';
+    var left = String(values[field] || '');
+    var value = String(row.value || '');
+    var valueList = Array.isArray(row.values) ? row.values.map(function (v) { return String(v); }) : [];
+
+    if (operator === 'filled') return left.trim() !== '';
+    if (operator === 'not_filled') return left.trim() === '';
+    if (operator === 'neq') return left !== value;
+    if (operator === 'in') return valueList.indexOf(left) >= 0;
+    if (operator === 'not_in') return valueList.indexOf(left) < 0;
+    if (operator === 'gt') return !isNaN(Number(left)) && !isNaN(Number(value)) && Number(left) > Number(value);
+    if (operator === 'gte') return !isNaN(Number(left)) && !isNaN(Number(value)) && Number(left) >= Number(value);
+    if (operator === 'lt') return !isNaN(Number(left)) && !isNaN(Number(value)) && Number(left) < Number(value);
+    if (operator === 'lte') return !isNaN(Number(left)) && !isNaN(Number(value)) && Number(left) <= Number(value);
+    return left === value;
+  }
+
+  function evaluateActiveHardStops(form, values) {
+    var stops = formArray(form, 'hard_stops', 'hardStops');
+    if (!stops.length) return [];
+
+    var active = [];
+    stops.forEach(function (stop) {
+      var row = asObject(stop);
+      var when = Array.isArray(row.when) ? row.when : [];
+      if (!when.length) return;
+
+      var matched = when.every(function (condition) {
+        return evaluateHardStopCondition(condition, values);
+      });
+      if (!matched) return;
+
+      var semantic = asObject(row.semantic_target);
+      var ruleType = normalizeHardStopRuleType(semantic.rule_type || row.type || row.rule_type || '');
+      var message = String(row.message || '').trim();
+      if (!message) {
+        message = 'A required validation check is incomplete.';
+      }
+
+      active.push({
+        message: message,
+        ruleType: ruleType,
+        priority: !!priorityHardStopTypes[ruleType]
+      });
+    });
+
+    active.sort(function (a, b) {
+      if (a.priority === b.priority) return 0;
+      return a.priority ? -1 : 1;
+    });
+    return active;
+  }
+
+  function renderHardStopPreview(form, values) {
+    var $wrap = $('#th-df-hard-stop-preview');
+    var $list = $('#th-df-hard-stop-list');
+    if (!$wrap.length || !$list.length) return [];
+
+    $list.empty();
+    var active = evaluateActiveHardStops(form, values);
+    if (!active.length) {
+      $wrap.attr('hidden', true);
+      return active;
+    }
+
+    var seen = {};
+    active.forEach(function (row) {
+      var key = row.ruleType + '|' + row.message;
+      if (seen[key]) return;
+      seen[key] = true;
+      var label = row.priority ? '[priority] ' : '';
+      $list.append($('<li>').text(label + row.message));
+    });
+
+    $wrap.attr('hidden', false);
+    return active;
+  }
+
   function renderForm(formKey) {
     var form = forms[formKey] || null;
     var $form = $('#th-df-form');
@@ -426,6 +523,8 @@
           + '<button type="button" class="th-df-btn th-df-next-step">Next</button>'
           + '</div>');
       }
+
+      renderHardStopPreview(form, collectFields($form));
     });
   }
 
@@ -513,6 +612,8 @@
     $form.on('input change', '[name]', function () {
       var formKey = String($select.val() || '');
       if (!formKey) return;
+      var form = forms[formKey] || null;
+      renderHardStopPreview(form, collectFields($form));
 
       clearTimeout(saveTimer);
       saveTimer = setTimeout(function () {
@@ -543,8 +644,15 @@
     $('#th-df-submit').on('click', function () {
       var formKey = String($select.val() || '');
       if (!formKey) return;
+      var form = forms[formKey] || null;
 
       var fields = collectFields($form);
+      var activeStops = renderHardStopPreview(form, fields);
+      if (activeStops.length) {
+        showErrors(activeStops.map(function (row) { return row.message; }));
+        $status.text('Please resolve required blockers before submitting.');
+        return;
+      }
       $status.text('Submitting...');
       $('#th-df-errors').empty().attr('hidden', true);
 

@@ -60,6 +60,9 @@ if (!function_exists('wp_strip_all_tags')) {
 if (!function_exists('wp_generate_password')) {
     function wp_generate_password($len = 12) { return substr(str_repeat('a', $len), 0, $len); }
 }
+if (!function_exists('get_the_title')) {
+    function get_the_title($post_id = 0) { return 'OCR Review ' . (int) $post_id; }
+}
 
 require_once dirname(__DIR__) . '/includes/helpers-schema.php';
 require_once dirname(__DIR__) . '/includes/helpers-ocr.php';
@@ -131,6 +134,9 @@ assert_true(!empty($preview['entity_count']), 'review patch bridge should return
 assert_true(isset($preview['structural_kpis']['baseline']) && is_array($preview['structural_kpis']['baseline']), 'preview should include baseline structural KPIs');
 assert_true(isset($preview['structural_kpis']['patched']) && is_array($preview['structural_kpis']['patched']), 'preview should include patched structural KPIs');
 assert_true(isset($preview['structural_kpis']['delta']) && is_array($preview['structural_kpis']['delta']), 'preview should include KPI deltas');
+assert_true(isset($preview['draft_output']['baseline']) && is_array($preview['draft_output']['baseline']), 'preview should include draft-output baseline payload');
+assert_true(isset($preview['draft_output']['patched']) && is_array($preview['draft_output']['patched']), 'preview should include draft-output patched payload');
+assert_true(isset($preview['draft_output']['delta']) && is_array($preview['draft_output']['delta']), 'preview should include draft-output delta payload');
 
 $apply = dcb_ocr_review_patch_bridge($review_id, array(
     'stable_ids' => array($first_widget_stable),
@@ -154,6 +160,9 @@ assert_true(!empty($apply['patch_applied']), 'review patch bridge should apply a
 assert_true(!empty($apply['patch_persisted']), 'review patch bridge should persist accepted patch');
 assert_true(isset($apply['validation']['accepted']), 'review patch bridge should return validation payload');
 assert_true(isset($apply['structural_kpis']['delta']) && is_array($apply['structural_kpis']['delta']), 'review patch bridge apply should return KPI deltas');
+assert_true(isset($apply['draft_output']['delta']) && is_array($apply['draft_output']['delta']), 'review patch bridge apply should return draft-output deltas');
+assert_true(!empty($apply['downstream_draft_regenerated']), 'review patch bridge apply should regenerate downstream draft output');
+assert_true(isset($apply['downstream_draft_field_count']) && is_int($apply['downstream_draft_field_count']), 'review patch bridge apply should report regenerated draft field count');
 
 $saved_patch_raw = (string) get_post_meta($review_id, '_dcb_ocr_review_canonical_graph_patch', true);
 assert_true($saved_patch_raw !== '', 'accepted patch should be persisted');
@@ -168,5 +177,27 @@ assert_true(isset($draft['digital_twin_hints']['canonical_graph_applied']) && !e
 assert_true(isset($draft['grouped_controls']) && is_array($draft['grouped_controls']), 'draft should expose grouped controls from canonical graph');
 assert_true(isset($draft['approval_blocks']) && is_array($draft['approval_blocks']), 'draft should expose approval blocks from canonical graph');
 assert_true(isset($draft['hard_stops']) && is_array($draft['hard_stops']) && !empty($draft['hard_stops']), 'draft should include generated semantic hard-stop rules');
+assert_true(isset($draft['draft_projection_quality']) && is_array($draft['draft_projection_quality']), 'draft should expose projection quality payload');
+assert_true(isset($draft['ocr_review']['canonical_graph_source_of_truth']['enabled']) && !empty($draft['ocr_review']['canonical_graph_source_of_truth']['enabled']), 'draft review payload should explicitly mark canonical graph source-of-truth mode');
+assert_true(isset($draft['ocr_review']['patched_graph_to_draft_consistency']), 'draft review payload should include patched-graph consistency metric');
+assert_true(isset($draft['ocr_review']['digital_twin_hint_completeness']), 'draft review payload should include digital twin hint completeness metric');
+assert_true(isset($draft['ocr_review']['semantic_hard_stop_generation_coverage']), 'draft review payload should include semantic hard-stop generation coverage metric');
+
+$patched_field_found = false;
+foreach ((array) ($draft['fields'] ?? array()) as $field_row) {
+    if (!is_array($field_row)) {
+        continue;
+    }
+    $meta = isset($field_row['ocr_meta']) && is_array($field_row['ocr_meta']) ? $field_row['ocr_meta'] : array();
+    $stable_id = sanitize_key((string) ($meta['stable_id'] ?? ''));
+    if ($stable_id !== $first_widget_stable) {
+        continue;
+    }
+    $patched_field_found = true;
+    assert_true((string) ($field_row['label'] ?? '') === 'Updated by review bridge smoke', 'patched canonical label should propagate to draft field');
+    assert_true(!empty($meta['canonical_graph_applied']), 'patched canonical widget field should indicate canonical projection applied');
+    break;
+}
+assert_true($patched_field_found, 'draft should contain a field mapped to patched canonical widget stable id');
 
 echo "ocr_review_bridge_payload_smoke:ok\n";

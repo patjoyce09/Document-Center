@@ -94,6 +94,11 @@ assert_true(!empty($patch_eval['enabled']), 'patch evaluation summary should be 
 assert_true(max(0, (int) ($patch_eval['cases_with_patch'] ?? 0)) === 1, 'summary should report one patched case');
 assert_true(isset($patch_eval['avg_false_positive_delta']), 'summary should include false positive delta');
 assert_true(isset($patch_eval['avg_cleanup_burden_delta']), 'summary should include cleanup burden delta');
+assert_true(isset($patch_eval['avg_grouped_control_projection_quality_delta']), 'summary should include grouped-control projection delta');
+assert_true(isset($patch_eval['avg_approval_block_projection_quality_delta']), 'summary should include approval-block projection delta');
+assert_true(isset($patch_eval['avg_semantic_hard_stop_generation_coverage_delta']), 'summary should include semantic hard-stop generation delta');
+assert_true(isset($patch_eval['avg_patched_graph_to_draft_consistency_delta']), 'summary should include patched-graph consistency delta');
+assert_true(isset($patch_eval['avg_digital_twin_hint_completeness_delta']), 'summary should include digital twin completeness delta');
 assert_true(isset($patch_eval['by_category']) && is_array($patch_eval['by_category']), 'summary should include per-category patch rollups');
 assert_true(isset($patch_eval['by_category']['false_positive_removal']), 'summary should include false_positive_removal category rollup');
 
@@ -103,6 +108,11 @@ assert_true(isset($case0['patch_evaluation']) && is_array($case0['patch_evaluati
 assert_true(isset($case0['patch_evaluation']['delta']) && is_array($case0['patch_evaluation']['delta']), 'case patch payload should include delta block');
 assert_true(isset($case0['patch_evaluation']['validation']) && is_array($case0['patch_evaluation']['validation']), 'case patch payload should include validation block');
 assert_true(isset($case0['patch_evaluation']['patch_categories']) && is_array($case0['patch_evaluation']['patch_categories']), 'case patch payload should include inferred categories');
+assert_true(isset($case0['draft_projection_quality']) && is_array($case0['draft_projection_quality']), 'case report should expose draft projection quality payload');
+assert_true(isset($case0['patch_evaluation']['delta']['grouped_control_projection_quality']), 'case patch delta should include grouped-control projection quality');
+assert_true(isset($case0['patch_evaluation']['delta']['approval_block_projection_quality']), 'case patch delta should include approval-block projection quality');
+assert_true(isset($case0['patch_evaluation']['delta']['semantic_hard_stop_generation_coverage']), 'case patch delta should include hard-stop generation coverage');
+assert_true(isset($case0['patch_evaluation']['delta']['patched_graph_to_draft_consistency']), 'case patch delta should include patched-graph consistency');
 
 $cmd_filter = sprintf(
     '%s %s --json --evaluate-patches --manifest=%s --patch-manifest=%s --patch-category=relation_correction',

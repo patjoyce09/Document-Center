@@ -2502,6 +2502,13 @@ function dcb_ocr_review_promote_builder_draft(int $review_id): array {
 
     if (!empty($canonical_patch) && isset($draft['ocr_canonical_form_graph']) && is_array($draft['ocr_canonical_form_graph'])) {
         $draft['ocr_canonical_form_graph'] = dcb_ocr_apply_canonical_graph_patch($draft['ocr_canonical_form_graph'], $canonical_patch);
+    }
+
+    if (isset($draft['ocr_canonical_form_graph']) && is_array($draft['ocr_canonical_form_graph'])) {
+        $draft['fields'] = dcb_ocr_project_draft_fields_from_canonical_graph(
+            isset($draft['fields']) && is_array($draft['fields']) ? $draft['fields'] : array(),
+            $draft['ocr_canonical_form_graph']
+        );
         $draft['hard_stop_anchors'] = isset($draft['ocr_canonical_form_graph']['semantic_hard_stop_anchors']) && is_array($draft['ocr_canonical_form_graph']['semantic_hard_stop_anchors'])
             ? $draft['ocr_canonical_form_graph']['semantic_hard_stop_anchors']
             : array();
@@ -2539,6 +2546,28 @@ function dcb_ocr_review_promote_builder_draft(int $review_id): array {
     $draft['ocr_review']['semantic_hard_stop_rule_count'] = count((array) ($draft['hard_stops'] ?? array()));
     $draft['ocr_review']['grouped_control_count'] = count((array) ($draft['grouped_controls'] ?? array()));
     $draft['ocr_review']['approval_block_count'] = count((array) ($draft['approval_blocks'] ?? array()));
+    $draft_projection_quality = dcb_ocr_build_draft_projection_quality(
+        isset($draft['fields']) && is_array($draft['fields']) ? $draft['fields'] : array(),
+        isset($draft['ocr_canonical_form_graph']) && is_array($draft['ocr_canonical_form_graph']) ? $draft['ocr_canonical_form_graph'] : array(),
+        (array) ($draft['hard_stop_targets'] ?? array()),
+        (array) ($draft['hard_stops'] ?? array()),
+        isset($draft['digital_twin_hints']) && is_array($draft['digital_twin_hints']) ? $draft['digital_twin_hints'] : array()
+    );
+    $draft['draft_projection_quality'] = $draft_projection_quality;
+    $draft['ocr_review']['draft_projection_quality'] = $draft_projection_quality;
+    $draft['ocr_review']['patched_graph_to_draft_consistency'] = round((float) ($draft_projection_quality['patched_graph_to_draft_consistency'] ?? 0.0), 4);
+    $draft['ocr_review']['digital_twin_hint_completeness'] = round((float) ($draft_projection_quality['digital_twin_hint_completeness'] ?? 0.0), 4);
+    $draft['ocr_review']['semantic_hard_stop_generation_coverage'] = round((float) ($draft_projection_quality['semantic_hard_stop_generation_coverage'] ?? 0.0), 4);
+    $draft['ocr_review']['builder_draft_cleanup_burden_proxy'] = round((float) ($draft_projection_quality['builder_draft_cleanup_burden_proxy'] ?? 0.0), 4);
+    $draft['ocr_review']['canonical_graph_source_of_truth'] = array(
+        'enabled' => true,
+        'deterministic_projection_version' => '1.0',
+        'hard_stop_targets_from' => 'ocr_canonical_form_graph.semantic_hard_stop_targets',
+        'hard_stops_from' => 'ocr_canonical_form_graph.semantic_hard_stop_targets',
+        'digital_twin_hints_from' => 'ocr_canonical_form_graph',
+        'grouped_controls_from' => 'digital_twin_hints.grouped_controls',
+        'approval_blocks_from' => 'digital_twin_hints.approval_blocks',
+    );
 
     update_post_meta($review_id, '_dcb_ocr_review_promoted_draft', wp_json_encode($draft));
     dcb_ocr_review_append_revision($review_id, 'promoted_to_builder_draft', array(
@@ -2923,6 +2952,8 @@ function dcb_ocr_review_patch_bridge(int $review_id, array $request = array()): 
     $accepted_patch = array();
     $patched_graph = $canonical_graph;
     $patched_kpis = $baseline_kpis;
+    $downstream_draft_regenerated = false;
+    $downstream_draft_field_count = 0;
 
     if (!empty($patch_in)) {
         $normalized_patch = dcb_ocr_normalize_canonical_graph_patch($patch_in);
@@ -2972,6 +3003,16 @@ function dcb_ocr_review_patch_bridge(int $review_id, array $request = array()): 
                 'patch_relation_count' => isset($accepted_patch['relations']) && is_array($accepted_patch['relations']) ? count($accepted_patch['relations']) : 0,
                 'validation_rejected_count' => max(0, (int) ($validation['rejected_count'] ?? 0)),
             ));
+
+            if (function_exists('dcb_ocr_review_promote_builder_draft')) {
+                $regenerated = dcb_ocr_review_promote_builder_draft($review_id);
+                if (is_array($regenerated)) {
+                    $downstream_draft_regenerated = true;
+                    $downstream_draft_field_count = isset($regenerated['fields']) && is_array($regenerated['fields'])
+                        ? count($regenerated['fields'])
+                        : 0;
+                }
+            }
         }
     }
 
@@ -2981,6 +3022,30 @@ function dcb_ocr_review_patch_bridge(int $review_id, array $request = array()): 
             continue;
         }
         $kpi_delta[$metric_key] = round(((float) $metric_val) - ((float) $baseline_kpis[$metric_key]), 4);
+    }
+
+    $baseline_draft_output = array();
+    $patched_draft_output = array();
+    $draft_output_delta = array();
+    if (function_exists('dcb_ocr_to_draft_form')) {
+        $draft_text = sanitize_textarea_field((string) ($extraction['text'] ?? ''));
+
+        $baseline_extraction = $extraction;
+        $baseline_extraction['ocr_canonical_form_graph'] = $canonical_graph;
+        $baseline_draft = dcb_ocr_to_draft_form($draft_text, 'OCR Review Bridge Baseline', $baseline_extraction);
+        $baseline_draft_output = dcb_ocr_bridge_draft_output_metrics($baseline_draft);
+
+        $patched_extraction = $extraction;
+        $patched_extraction['ocr_canonical_form_graph'] = $patched_graph;
+        $patched_draft = dcb_ocr_to_draft_form($draft_text, 'OCR Review Bridge Patched', $patched_extraction);
+        $patched_draft_output = dcb_ocr_bridge_draft_output_metrics($patched_draft);
+
+        foreach ($patched_draft_output as $metric_key => $metric_val) {
+            if (!isset($baseline_draft_output[$metric_key]) || !is_numeric($metric_val) || !is_numeric($baseline_draft_output[$metric_key])) {
+                continue;
+            }
+            $draft_output_delta[$metric_key] = round(((float) $metric_val) - ((float) $baseline_draft_output[$metric_key]), 4);
+        }
     }
 
     return array(
@@ -2998,6 +3063,27 @@ function dcb_ocr_review_patch_bridge(int $review_id, array $request = array()): 
             'patched' => $patched_kpis,
             'delta' => $kpi_delta,
         ),
+        'draft_output' => array(
+            'baseline' => $baseline_draft_output,
+            'patched' => $patched_draft_output,
+            'delta' => $draft_output_delta,
+        ),
+        'downstream_draft_regenerated' => $downstream_draft_regenerated,
+        'downstream_draft_field_count' => $downstream_draft_field_count,
+    );
+}
+
+function dcb_ocr_bridge_draft_output_metrics(array $draft): array {
+    $projection = isset($draft['draft_projection_quality']) && is_array($draft['draft_projection_quality'])
+        ? $draft['draft_projection_quality']
+        : array();
+
+    return array(
+        'generated_field_count' => isset($projection['generated_field_count']) ? (int) $projection['generated_field_count'] : 0,
+        'grouped_control_projection_quality' => round((float) ($projection['grouped_control_projection_quality'] ?? 0.0), 4),
+        'semantic_hard_stop_generation_coverage' => round((float) ($projection['semantic_hard_stop_generation_coverage'] ?? 0.0), 4),
+        'patched_graph_to_draft_consistency' => round((float) ($projection['patched_graph_to_draft_consistency'] ?? 0.0), 4),
+        'builder_draft_cleanup_burden_proxy' => round((float) ($projection['builder_draft_cleanup_burden_proxy'] ?? 0.0), 4),
     );
 }
 
@@ -4498,6 +4584,130 @@ function dcb_ocr_widget_geometry_hint(array $line_row, string $widget_type = 'te
     );
 }
 
+function dcb_ocr_line_has_explicit_fillable_anchor(string $line): bool {
+    $line = trim((string) $line);
+    if ($line === '') {
+        return false;
+    }
+
+    if (dcb_ocr_is_true_field_anchor_line($line) || dcb_ocr_is_choice_control_line($line)) {
+        return true;
+    }
+
+    if (preg_match('/_{2,}|\.{2,}|\[[ xX]?\]|☐|☑|\([ xX]?\)/u', $line)) {
+        return true;
+    }
+
+    return (bool) preg_match('/\b(mm\/?dd|yyyy|date\/?time|dob|birth\s*date|signature\s*date|printed\s*name|relationship|title)\b/i', $line);
+}
+
+function dcb_ocr_should_suppress_false_positive_widget(string $line, string $widget_type, array $context = array()): bool {
+    $line = trim((string) $line);
+    $widget_type = sanitize_key($widget_type);
+    if ($line === '' || $widget_type === '') {
+        return false;
+    }
+
+    if (in_array($widget_type, array('checkbox', 'yes_no_group', 'repeater_zone', 'table_cell', 'radio', 'select'), true)) {
+        return false;
+    }
+
+    $word_count = (int) preg_match_all('/\b[\p{L}\p{N}]{2,}\b/u', $line);
+    $prose_density = isset($context['prose_density']) && is_numeric($context['prose_density'])
+        ? (float) $context['prose_density']
+        : dcb_ocr_line_prose_density($line);
+    $region_class = sanitize_key((string) ($context['region_class'] ?? 'mixed_region'));
+    $template_zone = sanitize_key((string) ($context['template_zone'] ?? 'unmapped'));
+    $line_role = sanitize_key((string) ($context['line_role'] ?? ''));
+    $sparse_heavy = !empty($context['sparse_instruction_heavy']);
+    $has_anchor = dcb_ocr_line_has_explicit_fillable_anchor($line);
+
+    if ($has_anchor) {
+        return false;
+    }
+
+    $is_demographic = dcb_ocr_is_known_demographic_pattern($line);
+    if ($is_demographic && $word_count <= 12) {
+        return false;
+    }
+
+    $consent_legal_terms = (bool) preg_match('/\b(consent|authorize|authorization|privacy|hipaa|assignment\s+of\s+benefits|financial\s+responsib|release\s+of\s+information|understand|liable|liability|revoke\s+this\s+consent)\b/i', $line);
+    $approval_adjacent_terms = (bool) preg_match('/\b(signature|date\/?time|printed\s+name|relationship|legal\s+representative|guardian|witness|initials?)\b/i', $line);
+    $section_like_merged_label = (bool) preg_match('/\b(name\s+and\s+address|policy\s+or\s+claim\s+number|relationship\s+to\s+patient|group\s+number|benefits\s+act|medicare\s+secondary\s+payer)\b/i', $line);
+    $sparse_legal_terms = (bool) preg_match('/\b(medicare|non\s*coverage|detailed\s*notice|expedited|appeal|termination|coverage\s*ends?)\b/i', $line);
+    $approval_instructional_phrase = (bool) preg_match('/\b(by\s+signing|i\s+understand|i\s+authorize|consent\s+to|release\s+of\s+information|legal\s+representative|guardian|witness|responsib|liability)\b/i', $line);
+    $decorative_fragment = (bool) preg_match('/^[\W_\-\.=\s]{3,}$/u', $line)
+        || ((bool) preg_match('/^[\W_\.]+[A-Za-z]/u', $line) && $word_count >= 6 && $prose_density >= 0.58);
+
+    $narrative_zone = in_array($template_zone, array('fixed_text_region', 'unmapped'), true)
+        || in_array($region_class, array('narrative_region', 'heading_region'), true);
+    $approval_boundary_zone = $template_zone === 'approval_region' || $line_role === 'approval_cue';
+
+    if ($narrative_zone && $word_count >= 10 && $prose_density >= 0.56 && ($consent_legal_terms || $approval_adjacent_terms || $section_like_merged_label)) {
+        return true;
+    }
+
+    if (in_array($widget_type, array('signature_line', 'initials_line', 'date_field'), true)
+        && $word_count >= 11
+        && $prose_density >= 0.54
+        && ($consent_legal_terms || $approval_adjacent_terms)
+        && !preg_match('/\b(sign\s*here|signature\s*date|printed\s*name\s*[:_\.]|relationship\s*[:_\.]|title\s*[:_\.]|date\s*[:_\.])\b/i', $line)) {
+        return true;
+    }
+
+    if ($approval_boundary_zone
+        && in_array($widget_type, array('text_input', 'date_field', 'signature_line', 'initials_line'), true)
+        && $word_count >= 9
+        && $prose_density >= 0.52
+        && $approval_instructional_phrase
+        && !preg_match('/\b(sign\s*here|signature\s*date|printed\s*name\s*[:_\.]|relationship\s*[:_\.]|title\s*[:_\.]|date\s*[:_\.]|mm\/?dd|yyyy|dob)\b/i', $line)) {
+        return true;
+    }
+
+    if ($sparse_heavy && in_array($widget_type, array('text_input', 'date_field', 'signature_line', 'initials_line'), true)
+        && $word_count >= 8
+        && $prose_density >= 0.58
+        && !$is_demographic
+        && !$sparse_legal_terms) {
+        return true;
+    }
+
+    if ($decorative_fragment && !$is_demographic) {
+        return true;
+    }
+
+    return false;
+}
+
+function dcb_ocr_widget_has_strong_fillable_evidence(array $widget_row): bool {
+    $widget_type = sanitize_key((string) ($widget_row['widget_type'] ?? 'text_input'));
+    if (in_array($widget_type, array('checkbox', 'yes_no_group', 'repeater_zone', 'table_cell', 'radio', 'select'), true)) {
+        return true;
+    }
+
+    $line = sanitize_text_field((string) ($widget_row['label_text'] ?? ''));
+    if ($line === '') {
+        return false;
+    }
+
+    if (dcb_ocr_line_has_explicit_fillable_anchor($line)) {
+        return true;
+    }
+
+    if (dcb_ocr_is_known_demographic_pattern($line) && (int) preg_match_all('/\b[\p{L}\p{N}]{2,}\b/u', $line) <= 12) {
+        return true;
+    }
+
+    if ($widget_type === 'signature_line' || $widget_type === 'initials_line') {
+        return (bool) preg_match('/\b(sign\s*here|signature\s*[:_\.]|initials?\s*[:_\.]|printed\s*name\s*[:_\.])\b/i', $line);
+    }
+    if ($widget_type === 'date_field') {
+        return (bool) preg_match('/\b(date\s*[:_\.]|mm\/?dd|yyyy|dob|birth\s*date|signature\s*date)\b/i', $line);
+    }
+
+    return false;
+}
+
 function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = array(), array $native_pdf_pass = array()): array {
     $lines = isset($document_model['lines']) && is_array($document_model['lines']) ? $document_model['lines'] : array();
     $sections = isset($document_model['section_candidates']) && is_array($document_model['section_candidates']) ? $document_model['section_candidates'] : array();
@@ -4607,7 +4817,7 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
         } elseif (preg_match('/\b(date|mm\/dd|yyyy|dob|birth date)\b/i', $line)) {
             $date_field_anchor = dcb_ocr_is_true_field_anchor_line($line)
                 || preg_match('/_{2,}|\.{2,}|:{1}/', $line)
-                || preg_match('/\b(signature|signed|initials|dob|birth date|mm\/dd|yyyy)\b/i', $line);
+                || preg_match('/\b(signature\s*date|date\/?time|dob|birth\s*date|date\s*of\s*birth|mm\/dd|yyyy)\b/i', $line);
             if ($date_field_anchor) {
                 $widget_type = 'date_field';
                 $group_key = preg_match('/\b(signature|signed|printed name|relationship|title|initials)\b/i', $line)
@@ -4631,6 +4841,16 @@ function dcb_ocr_detect_field_widgets(array $document_model, array $page_meta = 
         }
 
         if ($widget_type === '') {
+            continue;
+        }
+
+        if (dcb_ocr_should_suppress_false_positive_widget($line, $widget_type, array(
+            'prose_density' => $prose_density,
+            'region_class' => $region_class,
+            'template_zone' => $template_zone,
+            'line_role' => $line_role,
+            'sparse_instruction_heavy' => !empty($sparse_policy['is_sparse_instruction_heavy']),
+        ))) {
             continue;
         }
 
@@ -6377,6 +6597,7 @@ function dcb_ocr_build_hard_stop_targets_from_semantic_anchors(array $anchors): 
                 'stable_id' => sanitize_key((string) ($row['stable_id'] ?? '')),
                 'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
                 'pair_key' => sanitize_key((string) ($row['pair_key'] ?? '')),
+                'widget_ids' => array_values(array_filter(array_map('sanitize_key', (array) ($row['widget_ids'] ?? array())))),
             ),
         );
     }
@@ -6412,6 +6633,7 @@ function dcb_ocr_build_hard_stop_targets_from_semantic_anchors(array $anchors): 
                     'anchor_type' => 'yes_no_group',
                     'stable_id' => sanitize_key((string) ($row['stable_id'] ?? '')),
                     'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
+                    'widget_ids' => array_values(array_filter(array_map('sanitize_key', (array) ($row['widget_ids'] ?? array())))),
                 ),
             );
             continue;
@@ -6425,6 +6647,7 @@ function dcb_ocr_build_hard_stop_targets_from_semantic_anchors(array $anchors): 
                     'anchor_type' => 'checkbox_group',
                     'stable_id' => sanitize_key((string) ($row['stable_id'] ?? '')),
                     'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
+                    'widget_ids' => array_values(array_filter(array_map('sanitize_key', (array) ($row['widget_ids'] ?? array())))),
                 ),
             );
         }
@@ -6443,6 +6666,7 @@ function dcb_ocr_build_hard_stop_targets_from_semantic_anchors(array $anchors): 
                 'stable_id' => sanitize_key((string) ($row['stable_id'] ?? '')),
                 'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
                 'label_text' => sanitize_text_field((string) ($row['label_text'] ?? '')),
+                'target_field' => sanitize_key((string) ($row['stable_id'] ?? '')),
             ),
         );
     }
@@ -6459,6 +6683,7 @@ function dcb_ocr_build_hard_stop_targets_from_semantic_anchors(array $anchors): 
                 'anchor_type' => 'demographic_block',
                 'stable_id' => sanitize_key((string) ($row['stable_id'] ?? '')),
                 'page_number' => max(1, (int) ($row['page_number'] ?? 1)),
+                'target_field' => sanitize_key((string) ($row['stable_id'] ?? '')),
             ),
         );
     }
@@ -6471,6 +6696,11 @@ function dcb_ocr_build_hard_stop_targets_from_semantic_anchors(array $anchors): 
 function dcb_ocr_infer_widget_fillable_classification(array $widget_row, array $template_zone_policy = array()): array {
     $widget_type = sanitize_key((string) ($widget_row['widget_type'] ?? 'text_input'));
     $template_zone = sanitize_key((string) ($widget_row['template_zone'] ?? ''));
+    $line_role = sanitize_key((string) ($widget_row['line_role'] ?? ''));
+    $prose_density = isset($widget_row['prose_density']) && is_numeric($widget_row['prose_density'])
+        ? (float) $widget_row['prose_density']
+        : dcb_ocr_line_prose_density((string) ($widget_row['label_text'] ?? ''));
+    $has_strong_evidence = dcb_ocr_widget_has_strong_fillable_evidence($widget_row);
 
     $fillable_whitelist = isset($template_zone_policy['whitelist_fillable']) && is_array($template_zone_policy['whitelist_fillable'])
         ? array_values(array_filter(array_map('sanitize_key', $template_zone_policy['whitelist_fillable'])))
@@ -6486,6 +6716,34 @@ function dcb_ocr_infer_widget_fillable_classification(array $widget_row, array $
     $classification = 'fillable';
     if (in_array($widget_type, $always_fixed_types, true)) {
         $classification = 'fixed_text';
+    } elseif (in_array($widget_type, array('text_input', 'date_field', 'signature_line', 'initials_line'), true)) {
+        $looks_narrative = in_array($line_role, array('instruction', 'prose'), true) || $prose_density >= 0.60;
+        $suppressed_like_false_positive = dcb_ocr_should_suppress_false_positive_widget(
+            (string) ($widget_row['label_text'] ?? ''),
+            $widget_type,
+            array(
+                'prose_density' => $prose_density,
+                'line_role' => $line_role,
+                'template_zone' => $template_zone,
+                'region_class' => sanitize_key((string) ($widget_row['region_class'] ?? 'mixed_region')),
+                'sparse_instruction_heavy' => !empty($widget_row['sparse_policy']['is_sparse_instruction_heavy']),
+            )
+        );
+        if ($suppressed_like_false_positive) {
+            $classification = 'fixed_text';
+        } elseif ($template_zone !== '' && in_array($template_zone, $narrative_blacklist, true) && !$has_strong_evidence) {
+            $classification = 'fixed_text';
+        } elseif ($looks_narrative && !$has_strong_evidence) {
+            $classification = 'fixed_text';
+        } elseif ($template_zone !== '' && in_array($template_zone, $fillable_whitelist, true)) {
+            $classification = 'fillable';
+        } elseif ($template_zone === 'approval_region' && $has_strong_evidence) {
+            $classification = 'fillable';
+        } elseif ($has_strong_evidence) {
+            $classification = 'fillable';
+        } else {
+            $classification = 'fixed_text';
+        }
     } elseif ($template_zone !== '' && in_array($template_zone, $narrative_blacklist, true) && !in_array($widget_type, $approval_local_types, true)) {
         $classification = 'fixed_text';
     } elseif ($template_zone !== '' && in_array($template_zone, $fillable_whitelist, true)) {
@@ -7684,6 +7942,244 @@ function dcb_ocr_canonical_lookup_by_stable_id(array $canonical_graph, string $b
     return array();
 }
 
+function dcb_ocr_field_shape_from_canonical_widget(array $widget_row): array {
+    $widget_type = sanitize_key((string) ($widget_row['widget_type'] ?? 'text_input'));
+    $suggested_type = sanitize_key((string) ($widget_row['suggested_type'] ?? ''));
+
+    $shape = array(
+        'type' => 'text',
+        'suggested_type' => 'text',
+        'detected_type' => $suggested_type !== '' ? $suggested_type : 'text',
+        'max' => 180,
+        'options' => array(),
+    );
+
+    if ($widget_type === 'yes_no_group') {
+        return array(
+            'type' => 'yes_no',
+            'suggested_type' => 'yes_no',
+            'detected_type' => 'yes_no',
+            'max' => 0,
+            'options' => array('yes' => 'Yes', 'no' => 'No'),
+        );
+    }
+    if ($widget_type === 'checkbox') {
+        return array(
+            'type' => 'checkbox',
+            'suggested_type' => 'checkbox',
+            'detected_type' => 'checkbox',
+            'max' => 0,
+            'options' => array(),
+        );
+    }
+    if ($widget_type === 'radio') {
+        return array(
+            'type' => 'radio',
+            'suggested_type' => 'radio',
+            'detected_type' => 'radio',
+            'max' => 0,
+            'options' => array('option_1' => 'Option 1', 'option_2' => 'Option 2'),
+        );
+    }
+    if ($widget_type === 'select') {
+        return array(
+            'type' => 'select',
+            'suggested_type' => 'select',
+            'detected_type' => 'select',
+            'max' => 0,
+            'options' => array('option_1' => 'Option 1', 'option_2' => 'Option 2'),
+        );
+    }
+    if ($widget_type === 'date_field') {
+        return array(
+            'type' => 'date',
+            'suggested_type' => 'date',
+            'detected_type' => 'date',
+            'max' => 30,
+            'options' => array(),
+        );
+    }
+    if ($widget_type === 'signature_line') {
+        return array(
+            'type' => 'text',
+            'suggested_type' => 'signature',
+            'detected_type' => 'signature',
+            'max' => 180,
+            'options' => array(),
+        );
+    }
+    if ($widget_type === 'initials_line') {
+        return array(
+            'type' => 'text',
+            'suggested_type' => 'initials',
+            'detected_type' => 'initials',
+            'max' => 16,
+            'options' => array(),
+        );
+    }
+    if ($widget_type === 'table_cell' || $widget_type === 'repeater_zone') {
+        return array(
+            'type' => 'text',
+            'suggested_type' => 'text',
+            'detected_type' => 'table_cell',
+            'max' => 120,
+            'options' => array(),
+        );
+    }
+
+    return $shape;
+}
+
+function dcb_ocr_derive_field_key_from_canonical_widget(array $widget_row, array $existing = array()): string {
+    $existing = array_fill_keys(array_values(array_filter(array_map('sanitize_key', $existing))), true);
+    $label = sanitize_text_field((string) ($widget_row['label_text'] ?? ''));
+    $seed = $label !== '' ? $label : (string) ($widget_row['widget_type'] ?? 'field');
+    $base = sanitize_key(str_replace(array('/', '-', '.'), '_', $seed));
+    if ($base === '') {
+        $base = sanitize_key((string) ($widget_row['widget_type'] ?? 'field'));
+    }
+    if ($base === '') {
+        $base = 'field';
+    }
+
+    $candidate = $base;
+    $suffix = 2;
+    while (isset($existing[$candidate])) {
+        $candidate = $base . '_' . $suffix;
+        $suffix++;
+    }
+    return $candidate;
+}
+
+function dcb_ocr_project_draft_fields_from_canonical_graph(array $draft_fields, array $canonical_graph): array {
+    $fields = array_values(array_filter($draft_fields, 'is_array'));
+    $field_index_by_key = array();
+    $existing_keys = array();
+    foreach ($fields as $idx => $field_row) {
+        $field_key = sanitize_key((string) ($field_row['key'] ?? ''));
+        if ($field_key === '') {
+            continue;
+        }
+        $field_index_by_key[$field_key] = $idx;
+        $existing_keys[] = $field_key;
+    }
+
+    $field_key_map = dcb_ocr_field_key_map_from_draft_fields($fields);
+
+    foreach ((array) ($canonical_graph['pages'] ?? array()) as $page_row) {
+        if (!is_array($page_row)) {
+            continue;
+        }
+        foreach ((array) ($page_row['widgets'] ?? array()) as $widget_row) {
+            if (!is_array($widget_row)) {
+                continue;
+            }
+
+            $stable_id = sanitize_key((string) ($widget_row['stable_id'] ?? ''));
+            $widget_id = sanitize_key((string) ($widget_row['widget_id'] ?? ''));
+            $widget_lookup_keys = array_values(array_filter(array_unique(array(
+                $stable_id,
+                $widget_id,
+                $widget_id !== '' ? 'widget_' . $widget_id : '',
+            ))));
+
+            $field_key = '';
+            foreach ($widget_lookup_keys as $lookup_key) {
+                if (isset($field_key_map[$lookup_key])) {
+                    $field_key = sanitize_key((string) $field_key_map[$lookup_key]);
+                    break;
+                }
+            }
+
+            $shape = dcb_ocr_field_shape_from_canonical_widget($widget_row);
+            $classification = sanitize_key((string) ($widget_row['classification'] ?? ''));
+            $is_fillable = (int) ($widget_row['is_fillable'] ?? ($classification === 'fixed_text' ? 0 : 1));
+            $is_fillable = max(0, min(1, $is_fillable));
+
+            if ($field_key === '') {
+                if ($is_fillable === 0) {
+                    continue;
+                }
+                $field_key = dcb_ocr_derive_field_key_from_canonical_widget($widget_row, $existing_keys);
+                $existing_keys[] = $field_key;
+            }
+
+            $field_idx = isset($field_index_by_key[$field_key]) ? (int) $field_index_by_key[$field_key] : -1;
+            if ($field_idx < 0) {
+                $fields[] = array(
+                    'key' => $field_key,
+                    'label' => sanitize_text_field((string) ($widget_row['label_text'] ?? ucwords(str_replace('_', ' ', (string) $field_key)))),
+                    'type' => sanitize_key((string) ($shape['type'] ?? 'text')),
+                    'required' => false,
+                    'ocr_meta' => array(),
+                );
+                $field_idx = count($fields) - 1;
+                $field_index_by_key[$field_key] = $field_idx;
+            }
+
+            $field = isset($fields[$field_idx]) && is_array($fields[$field_idx]) ? $fields[$field_idx] : array();
+            $field['key'] = $field_key;
+
+            $label = sanitize_text_field((string) ($widget_row['label_text'] ?? ($field['label'] ?? '')));
+            if ($label !== '') {
+                $field['label'] = $label;
+            }
+
+            $resolved_type = sanitize_key((string) ($shape['type'] ?? ($field['type'] ?? 'text')));
+            if (!in_array($resolved_type, dcb_allowed_field_types(), true)) {
+                $resolved_type = 'text';
+            }
+            $field['type'] = $resolved_type;
+
+            if ($resolved_type === 'select' || $resolved_type === 'yes_no' || $resolved_type === 'radio') {
+                $options = isset($shape['options']) && is_array($shape['options']) ? $shape['options'] : array();
+                if (!empty($options)) {
+                    $field['options'] = $options;
+                }
+            }
+            if ($resolved_type === 'text') {
+                $field['max'] = max(10, (int) ($shape['max'] ?? (int) ($field['max'] ?? 180)));
+            }
+
+            if ($is_fillable === 0) {
+                $field['required'] = false;
+            }
+
+            $ocr_meta = isset($field['ocr_meta']) && is_array($field['ocr_meta']) ? $field['ocr_meta'] : array();
+            $ocr_meta['widget_id'] = $widget_id;
+            $ocr_meta['stable_id'] = $stable_id;
+            $ocr_meta['widget_type'] = sanitize_key((string) ($widget_row['widget_type'] ?? ''));
+            $ocr_meta['group_key'] = sanitize_key((string) ($widget_row['group_key'] ?? ''));
+            $ocr_meta['section_hint'] = sanitize_key((string) ($widget_row['section_hint'] ?? ($ocr_meta['section_hint'] ?? 'main_section')));
+            $ocr_meta['region_hint'] = sanitize_key((string) ($widget_row['region_hint'] ?? ($ocr_meta['region_hint'] ?? 'left')));
+            $ocr_meta['page_number'] = max(1, (int) ($widget_row['page_number'] ?? ($ocr_meta['page_number'] ?? 1)));
+            $ocr_meta['line_index'] = max(0, (int) ($widget_row['line_index'] ?? ($ocr_meta['line_index'] ?? 0)));
+            $ocr_meta['source_text_snippet'] = sanitize_text_field((string) ($widget_row['label_text'] ?? ($ocr_meta['source_text_snippet'] ?? '')));
+            $ocr_meta['template_zone'] = sanitize_key((string) ($widget_row['template_zone'] ?? ($ocr_meta['template_zone'] ?? 'unmapped')));
+            $ocr_meta['confidence_score'] = isset($widget_row['confidence_score']) ? round(max(0.0, min(1.0, (float) $widget_row['confidence_score'])), 4) : (float) ($ocr_meta['confidence_score'] ?? 0.0);
+            $ocr_meta['confidence_bucket'] = sanitize_key((string) ($widget_row['confidence_bucket'] ?? ($ocr_meta['confidence_bucket'] ?? dcb_confidence_bucket((float) ($ocr_meta['confidence_score'] ?? 0.0)))));
+            $ocr_meta['suggested_type'] = sanitize_key((string) ($shape['suggested_type'] ?? ($ocr_meta['suggested_type'] ?? 'text')));
+            $ocr_meta['detected_type'] = sanitize_key((string) ($shape['detected_type'] ?? ($ocr_meta['detected_type'] ?? $ocr_meta['suggested_type'])));
+            $ocr_meta['fillable_classification'] = $classification !== '' ? $classification : ($is_fillable ? 'fillable' : 'fixed_text');
+            $ocr_meta['is_fillable'] = $is_fillable;
+            $ocr_meta['canonical_graph_applied'] = true;
+            $field['ocr_meta'] = $ocr_meta;
+
+            $fields[$field_idx] = $field;
+
+            if ($widget_id !== '') {
+                $field_key_map[$widget_id] = $field_key;
+                $field_key_map['widget_' . $widget_id] = $field_key;
+            }
+            if ($stable_id !== '') {
+                $field_key_map[$stable_id] = $field_key;
+            }
+        }
+    }
+
+    return array_values($fields);
+}
+
 function dcb_ocr_generate_hard_stops_from_semantic_targets(array $targets, array $canonical_graph, array $draft_fields, array $existing_stops = array()): array {
     $field_key_map = dcb_ocr_field_key_map_from_draft_fields($draft_fields);
     $rules = array();
@@ -7727,11 +8223,31 @@ function dcb_ocr_generate_hard_stops_from_semantic_targets(array $targets, array
             continue;
         }
         $target = isset($target_row['target']) && is_array($target_row['target']) ? $target_row['target'] : array();
+        if (empty($target)) {
+            $target = array(
+                'stable_id' => sanitize_key((string) ($target_row['stable_id'] ?? '')),
+                'widget_ids' => isset($target_row['widget_ids']) && is_array($target_row['widget_ids']) ? (array) $target_row['widget_ids'] : array(),
+                'from' => sanitize_key((string) ($target_row['from'] ?? ($target_row['from_widget_id'] ?? ''))),
+                'to' => sanitize_key((string) ($target_row['to'] ?? ($target_row['to_widget_id'] ?? ''))),
+                'target_field' => sanitize_key((string) ($target_row['target_field'] ?? '')),
+            );
+        }
         $stable_id = sanitize_key((string) ($target['stable_id'] ?? ''));
+        $target_field = sanitize_key((string) ($target['target_field'] ?? ''));
 
-        if ($rule_type === 'approval_block_incomplete') {
+        $normalized_rule_type = $rule_type;
+        if ($rule_type === 'required_sparse_critical_missing') {
+            $normalized_rule_type = 'sparse_form_critical_field_set_missing_field';
+        } elseif ($rule_type === 'required_demographic_missing') {
+            $normalized_rule_type = 'demographic_block_incomplete';
+        }
+
+        if ($normalized_rule_type === 'approval_block_incomplete') {
             $approval = dcb_ocr_canonical_lookup_by_stable_id($canonical_graph, 'approval_blocks', $stable_id);
             $widget_ids = isset($approval['widget_ids']) && is_array($approval['widget_ids']) ? $approval['widget_ids'] : array();
+            if (empty($widget_ids) && isset($target['widget_ids']) && is_array($target['widget_ids'])) {
+                $widget_ids = (array) $target['widget_ids'];
+            }
             foreach ($widget_ids as $widget_id) {
                 $widget_id = sanitize_key((string) $widget_id);
                 if ($widget_id === '' || !isset($field_key_map[$widget_id])) {
@@ -7742,7 +8258,14 @@ function dcb_ocr_generate_hard_stops_from_semantic_targets(array $targets, array
             continue;
         }
 
-        if ($rule_type === 'signature_date_pair_missing') {
+        if ($normalized_rule_type === 'signature_date_pair_missing') {
+            $relation = dcb_ocr_canonical_lookup_by_stable_id($canonical_graph, 'relations', $stable_id);
+            if (empty($target['from']) && !empty($relation['from_widget_id'])) {
+                $target['from'] = sanitize_key((string) $relation['from_widget_id']);
+            }
+            if (empty($target['to']) && !empty($relation['to_widget_id'])) {
+                $target['to'] = sanitize_key((string) $relation['to_widget_id']);
+            }
             foreach (array('from', 'to') as $pair_key) {
                 $widget_id = sanitize_key((string) ($target[$pair_key] ?? ''));
                 if ($widget_id === '' || !isset($field_key_map[$widget_id])) {
@@ -7753,9 +8276,13 @@ function dcb_ocr_generate_hard_stops_from_semantic_targets(array $targets, array
             continue;
         }
 
-        if ($rule_type === 'checkbox_group_incomplete') {
+        if ($normalized_rule_type === 'checkbox_group_incomplete') {
             $group = dcb_ocr_canonical_lookup_by_stable_id($canonical_graph, 'grouped_controls', $stable_id);
-            foreach ((array) ($group['widget_ids'] ?? array()) as $widget_id) {
+            $widget_ids = isset($group['widget_ids']) && is_array($group['widget_ids']) ? (array) $group['widget_ids'] : array();
+            if (empty($widget_ids) && isset($target['widget_ids']) && is_array($target['widget_ids'])) {
+                $widget_ids = (array) $target['widget_ids'];
+            }
+            foreach ($widget_ids as $widget_id) {
                 $widget_id = sanitize_key((string) $widget_id);
                 if ($widget_id === '' || !isset($field_key_map[$widget_id])) {
                     continue;
@@ -7765,16 +8292,24 @@ function dcb_ocr_generate_hard_stops_from_semantic_targets(array $targets, array
             continue;
         }
 
-        if ($rule_type === 'sparse_form_critical_field_set_missing_field') {
+        if ($normalized_rule_type === 'sparse_form_critical_field_set_missing_field') {
+            if ($target_field !== '' && isset($field_key_map[$target_field])) {
+                $append_rule('required_sparse_critical_missing', 'error', $field_key_map[$target_field], 'A critical field required for sparse forms is missing.', $target_row);
+                continue;
+            }
             if ($stable_id !== '' && isset($field_key_map[$stable_id])) {
-                $append_rule('sparse_form_critical_field_set_missing_field', 'error', $field_key_map[$stable_id], 'A critical field required for sparse forms is missing.', $target_row);
+                $append_rule('required_sparse_critical_missing', 'error', $field_key_map[$stable_id], 'A critical field required for sparse forms is missing.', $target_row);
             }
             continue;
         }
 
-        if ($rule_type === 'demographic_block_incomplete') {
+        if ($normalized_rule_type === 'demographic_block_incomplete') {
+            if ($target_field !== '' && isset($field_key_map[$target_field])) {
+                $append_rule('required_demographic_missing', 'warning', $field_key_map[$target_field], 'Demographic block is incomplete.', $target_row);
+                continue;
+            }
             if ($stable_id !== '' && isset($field_key_map[$stable_id])) {
-                $append_rule('demographic_block_incomplete', 'warning', $field_key_map[$stable_id], 'Demographic block is incomplete.', $target_row);
+                $append_rule('required_demographic_missing', 'warning', $field_key_map[$stable_id], 'Demographic block is incomplete.', $target_row);
                 continue;
             }
             foreach ($draft_fields as $field_row) {
@@ -7786,7 +8321,7 @@ function dcb_ocr_generate_hard_stops_from_semantic_targets(array $targets, array
                 if ($field_key === '' || !preg_match('/\b(patient|member|name|dob|birth|phone|email|address|policy|id|mrn)\b/i', $label)) {
                     continue;
                 }
-                $append_rule('demographic_block_incomplete', 'warning', $field_key, 'Demographic block is incomplete.', $target_row);
+                $append_rule('required_demographic_missing', 'warning', $field_key, 'Demographic block is incomplete.', $target_row);
             }
         }
     }
@@ -7802,7 +8337,290 @@ function dcb_ocr_generate_hard_stops_from_semantic_targets(array $targets, array
         }
     }
 
+    usort($rules, static function ($a, $b) {
+        $a_type = sanitize_key((string) ($a['type'] ?? ''));
+        $b_type = sanitize_key((string) ($b['type'] ?? ''));
+        if ($a_type !== $b_type) {
+            return strcmp($a_type, $b_type);
+        }
+        $a_field = sanitize_key((string) ($a['when'][0]['field'] ?? ''));
+        $b_field = sanitize_key((string) ($b['when'][0]['field'] ?? ''));
+        return strcmp($a_field, $b_field);
+    });
+
     return array_values($rules);
+}
+
+function dcb_ocr_build_draft_projection_quality(array $draft_fields, array $canonical_graph, array $hard_stop_targets = array(), array $hard_stops = array(), array $digital_twin_hints = array()): array {
+    $field_key_map = dcb_ocr_field_key_map_from_draft_fields($draft_fields);
+    $field_lookup_by_key = array();
+    foreach ($draft_fields as $field_row) {
+        if (!is_array($field_row)) {
+            continue;
+        }
+        $field_key = sanitize_key((string) ($field_row['key'] ?? ''));
+        if ($field_key === '') {
+            continue;
+        }
+        $field_lookup_by_key[$field_key] = $field_row;
+    }
+
+    $canonical_fillable_widgets = 0;
+    $canonical_fillable_mapped = 0;
+    $canonical_label_hits = 0;
+    $canonical_type_hits = 0;
+
+    $canonical_groups_total = 0;
+    $canonical_groups_mapped = 0;
+    $canonical_approvals_total = 0;
+    $canonical_approvals_mapped = 0;
+
+    $hint_groups_by_stable = array();
+    foreach ((array) ($digital_twin_hints['grouped_controls'] ?? array()) as $group_row) {
+        if (!is_array($group_row)) {
+            continue;
+        }
+        $sid = sanitize_key((string) ($group_row['stable_id'] ?? ''));
+        if ($sid === '') {
+            continue;
+        }
+        $hint_groups_by_stable[$sid] = $group_row;
+    }
+    $hint_approvals_by_stable = array();
+    foreach ((array) ($digital_twin_hints['approval_blocks'] ?? array()) as $approval_row) {
+        if (!is_array($approval_row)) {
+            continue;
+        }
+        $sid = sanitize_key((string) ($approval_row['stable_id'] ?? ''));
+        if ($sid === '') {
+            continue;
+        }
+        $hint_approvals_by_stable[$sid] = $approval_row;
+    }
+
+    foreach ((array) ($canonical_graph['pages'] ?? array()) as $page_row) {
+        if (!is_array($page_row)) {
+            continue;
+        }
+
+        foreach ((array) ($page_row['widgets'] ?? array()) as $widget_row) {
+            if (!is_array($widget_row)) {
+                continue;
+            }
+            $classification = sanitize_key((string) ($widget_row['classification'] ?? ''));
+            $is_fillable = (int) ($widget_row['is_fillable'] ?? ($classification === 'fixed_text' ? 0 : 1));
+            if ($is_fillable !== 1) {
+                continue;
+            }
+
+            $canonical_fillable_widgets++;
+            $stable_id = sanitize_key((string) ($widget_row['stable_id'] ?? ''));
+            $widget_id = sanitize_key((string) ($widget_row['widget_id'] ?? ''));
+            $field_key = '';
+            foreach (array($stable_id, $widget_id, $widget_id !== '' ? 'widget_' . $widget_id : '') as $lookup_key) {
+                if ($lookup_key === '' || !isset($field_key_map[$lookup_key])) {
+                    continue;
+                }
+                $field_key = sanitize_key((string) $field_key_map[$lookup_key]);
+                if ($field_key !== '') {
+                    break;
+                }
+            }
+            if ($field_key === '' || !isset($field_lookup_by_key[$field_key])) {
+                continue;
+            }
+            $canonical_fillable_mapped++;
+
+            $field_row = (array) $field_lookup_by_key[$field_key];
+            $field_label = strtolower(trim((string) ($field_row['label'] ?? '')));
+            $canonical_label = strtolower(trim((string) ($widget_row['label_text'] ?? '')));
+            if ($canonical_label !== '' && $field_label !== '' && $field_label === $canonical_label) {
+                $canonical_label_hits++;
+            }
+
+            $expected_type = sanitize_key((string) (dcb_ocr_field_shape_from_canonical_widget($widget_row)['type'] ?? 'text'));
+            $actual_type = sanitize_key((string) ($field_row['type'] ?? 'text'));
+            if ($expected_type === '' || !in_array($expected_type, dcb_allowed_field_types(), true)) {
+                $expected_type = 'text';
+            }
+            if ($actual_type === $expected_type) {
+                $canonical_type_hits++;
+            }
+        }
+
+        foreach ((array) ($page_row['grouped_controls'] ?? array()) as $group_row) {
+            if (!is_array($group_row)) {
+                continue;
+            }
+            $canonical_groups_total++;
+            $sid = sanitize_key((string) ($group_row['stable_id'] ?? ''));
+            if ($sid === '' || !isset($hint_groups_by_stable[$sid])) {
+                continue;
+            }
+            $hint_row = (array) $hint_groups_by_stable[$sid];
+            $expected_widgets = array_values(array_filter(array_map('sanitize_key', (array) ($group_row['widget_ids'] ?? array()))));
+            $mapped_fields = array_values(array_filter(array_map('sanitize_key', (array) ($hint_row['field_keys'] ?? array()))));
+            $expected_mapped = 0;
+            foreach ($expected_widgets as $wid) {
+                if (isset($field_key_map[$wid])) {
+                    $expected_mapped++;
+                }
+            }
+            if ($expected_mapped <= 0) {
+                $canonical_groups_mapped += !empty($mapped_fields) ? 1 : 0;
+                continue;
+            }
+            $canonical_groups_mapped += min(1.0, count($mapped_fields) / max(1, $expected_mapped));
+        }
+
+        foreach ((array) ($page_row['approval_blocks'] ?? array()) as $approval_row) {
+            if (!is_array($approval_row)) {
+                continue;
+            }
+            $canonical_approvals_total++;
+            $sid = sanitize_key((string) ($approval_row['stable_id'] ?? ''));
+            if ($sid === '' || !isset($hint_approvals_by_stable[$sid])) {
+                continue;
+            }
+            $hint_row = (array) $hint_approvals_by_stable[$sid];
+            $expected_widgets = array_values(array_filter(array_map('sanitize_key', (array) ($approval_row['widget_ids'] ?? array()))));
+            $mapped_fields = array_values(array_filter(array_map('sanitize_key', (array) ($hint_row['field_keys'] ?? array()))));
+            $expected_mapped = 0;
+            foreach ($expected_widgets as $wid) {
+                if (isset($field_key_map[$wid])) {
+                    $expected_mapped++;
+                }
+            }
+            $mapping_ratio = $expected_mapped > 0 ? min(1.0, count($mapped_fields) / max(1, $expected_mapped)) : (!empty($mapped_fields) ? 1.0 : 0.0);
+            $pair_ratio = 0.0;
+            if (max(0, (int) ($approval_row['signature_line_index'] ?? 0)) > 0) {
+                $pair_ratio += 0.5;
+            }
+            if (max(0, (int) ($approval_row['date_line_index'] ?? 0)) > 0) {
+                $pair_ratio += 0.5;
+            }
+            $canonical_approvals_mapped += round(($mapping_ratio * 0.7) + ($pair_ratio * 0.3), 4);
+        }
+    }
+
+    $target_types = array();
+    foreach ($hard_stop_targets as $target_row) {
+        if (!is_array($target_row)) {
+            continue;
+        }
+        $rule_type = sanitize_key((string) ($target_row['rule_type'] ?? ''));
+        if ($rule_type !== '') {
+            if (!isset($target_types[$rule_type])) {
+                $target_types[$rule_type] = 0;
+            }
+            $target_types[$rule_type]++;
+        }
+    }
+
+    $stop_types = array();
+    foreach ($hard_stops as $stop_row) {
+        if (!is_array($stop_row)) {
+            continue;
+        }
+        $rule_type = sanitize_key((string) ($stop_row['type'] ?? ''));
+        if ($rule_type === '') {
+            continue;
+        }
+        if ($rule_type === 'required_demographic_missing') {
+            $rule_type = 'demographic_block_incomplete';
+        } elseif ($rule_type === 'required_sparse_critical_missing') {
+            $rule_type = 'sparse_form_critical_field_set_missing_field';
+        }
+        if (!isset($stop_types[$rule_type])) {
+            $stop_types[$rule_type] = 0;
+        }
+        $stop_types[$rule_type]++;
+    }
+
+    $required_types = array(
+        'approval_block_incomplete',
+        'signature_date_pair_missing',
+        'checkbox_group_incomplete',
+        'demographic_block_incomplete',
+        'sparse_form_critical_field_set_missing_field',
+    );
+    $required_total = 0;
+    $required_hits = 0.0;
+    foreach ($required_types as $rule_type) {
+        $expected = max(0, (int) ($target_types[$rule_type] ?? 0));
+        if ($expected <= 0) {
+            continue;
+        }
+        $required_total++;
+        $actual = max(0, (int) ($stop_types[$rule_type] ?? 0));
+        $required_hits += min(1.0, $actual / max(1, $expected));
+    }
+
+    $semantic_hard_stop_generation_coverage = $required_total > 0
+        ? round($required_hits / max(1, $required_total), 4)
+        : 1.0;
+
+    $grouped_control_projection_quality = round($canonical_groups_total > 0 ? ($canonical_groups_mapped / max(1, $canonical_groups_total)) : 1.0, 4);
+    $approval_block_projection_quality = round($canonical_approvals_total > 0 ? ($canonical_approvals_mapped / max(1, $canonical_approvals_total)) : 1.0, 4);
+    $generated_field_projection_quality = round($canonical_fillable_widgets > 0 ? ($canonical_fillable_mapped / max(1, $canonical_fillable_widgets)) : 1.0, 4);
+    $label_consistency = round($canonical_fillable_mapped > 0 ? ($canonical_label_hits / max(1, $canonical_fillable_mapped)) : 1.0, 4);
+    $type_consistency = round($canonical_fillable_mapped > 0 ? ($canonical_type_hits / max(1, $canonical_fillable_mapped)) : 1.0, 4);
+
+    $digital_twin_hint_components = array(
+        !empty($digital_twin_hints['canonical_graph_applied']) ? 1.0 : 0.0,
+        !empty((array) ($digital_twin_hints['grouped_controls'] ?? array())) || $canonical_groups_total === 0 ? 1.0 : 0.0,
+        !empty((array) ($digital_twin_hints['approval_blocks'] ?? array())) || $canonical_approvals_total === 0 ? 1.0 : 0.0,
+        isset($digital_twin_hints['signature_pairs']) && is_array($digital_twin_hints['signature_pairs']) ? 1.0 : 0.0,
+        isset($digital_twin_hints['table_regions']) && is_array($digital_twin_hints['table_regions']) ? 1.0 : 0.0,
+    );
+    $digital_twin_hint_completeness = round(array_sum($digital_twin_hint_components) / max(1, count($digital_twin_hint_components)), 4);
+
+    $generated_field_count = count(array_values(array_filter($draft_fields, 'is_array')));
+    $generated_field_count_delta = $generated_field_count - $canonical_fillable_widgets;
+    $generated_field_count_delta_quality = $canonical_fillable_widgets > 0
+        ? round(max(0.0, 1.0 - (abs($generated_field_count_delta) / max(1, $canonical_fillable_widgets))), 4)
+        : 1.0;
+
+    $patched_graph_to_draft_consistency = round(
+        ($generated_field_projection_quality * 0.25)
+        + ($grouped_control_projection_quality * 0.20)
+        + ($approval_block_projection_quality * 0.20)
+        + ($semantic_hard_stop_generation_coverage * 0.15)
+        + ($label_consistency * 0.10)
+        + ($type_consistency * 0.10),
+        4
+    );
+
+    $builder_draft_cleanup_burden_proxy = round(
+        max(0.0, min(1.0,
+            (1.0 - $patched_graph_to_draft_consistency) * 0.7
+            + (1.0 - $digital_twin_hint_completeness) * 0.2
+            + (1.0 - $generated_field_count_delta_quality) * 0.1
+        )),
+        4
+    );
+
+    return array(
+        'generated_field_count' => $generated_field_count,
+        'canonical_fillable_widget_count' => $canonical_fillable_widgets,
+        'generated_field_count_delta' => $generated_field_count_delta,
+        'generated_field_count_delta_quality' => $generated_field_count_delta_quality,
+        'generated_field_projection_quality' => $generated_field_projection_quality,
+        'grouped_control_projection_quality' => $grouped_control_projection_quality,
+        'approval_block_projection_quality' => $approval_block_projection_quality,
+        'semantic_hard_stop_generation_coverage' => $semantic_hard_stop_generation_coverage,
+        'patched_graph_to_draft_consistency' => $patched_graph_to_draft_consistency,
+        'digital_twin_hint_completeness' => $digital_twin_hint_completeness,
+        'builder_draft_cleanup_burden_proxy' => $builder_draft_cleanup_burden_proxy,
+        'label_consistency' => $label_consistency,
+        'type_consistency' => $type_consistency,
+        'counts' => array(
+            'canonical_group_count' => $canonical_groups_total,
+            'canonical_approval_block_count' => $canonical_approvals_total,
+            'hard_stop_target_count' => count($hard_stop_targets),
+            'hard_stop_rule_count' => count($hard_stops),
+        ),
+    );
 }
 
 function dcb_ocr_merge_digital_twin_hints_with_canonical_graph(array $hints, array $canonical_graph, array $draft_fields): array {
@@ -8311,6 +9129,10 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
     $draft['ocr_page_graph'] = $page_graph;
     $draft['ocr_scene_graph'] = $scene_graph;
     $draft['ocr_canonical_form_graph'] = $canonical_graph;
+    $draft['fields'] = dcb_ocr_project_draft_fields_from_canonical_graph(
+        isset($draft['fields']) && is_array($draft['fields']) ? $draft['fields'] : array(),
+        $canonical_graph
+    );
     $draft['hard_stop_anchors'] = isset($canonical_graph['semantic_hard_stop_anchors']) && is_array($canonical_graph['semantic_hard_stop_anchors'])
         ? $canonical_graph['semantic_hard_stop_anchors']
         : array();
@@ -8338,6 +9160,28 @@ function dcb_ocr_to_draft_form(string $ocr_text, string $label = 'Scanned Form',
     $draft['ocr_review']['semantic_hard_stop_rule_count'] = count((array) ($draft['hard_stops'] ?? array()));
     $draft['ocr_review']['grouped_control_count'] = count((array) ($draft['grouped_controls'] ?? array()));
     $draft['ocr_review']['approval_block_count'] = count((array) ($draft['approval_blocks'] ?? array()));
+    $draft_projection_quality = dcb_ocr_build_draft_projection_quality(
+        isset($draft['fields']) && is_array($draft['fields']) ? $draft['fields'] : array(),
+        $canonical_graph,
+        (array) ($draft['hard_stop_targets'] ?? array()),
+        (array) ($draft['hard_stops'] ?? array()),
+        isset($draft['digital_twin_hints']) && is_array($draft['digital_twin_hints']) ? $draft['digital_twin_hints'] : array()
+    );
+    $draft['draft_projection_quality'] = $draft_projection_quality;
+    $draft['ocr_review']['draft_projection_quality'] = $draft_projection_quality;
+    $draft['ocr_review']['patched_graph_to_draft_consistency'] = round((float) ($draft_projection_quality['patched_graph_to_draft_consistency'] ?? 0.0), 4);
+    $draft['ocr_review']['digital_twin_hint_completeness'] = round((float) ($draft_projection_quality['digital_twin_hint_completeness'] ?? 0.0), 4);
+    $draft['ocr_review']['semantic_hard_stop_generation_coverage'] = round((float) ($draft_projection_quality['semantic_hard_stop_generation_coverage'] ?? 0.0), 4);
+    $draft['ocr_review']['builder_draft_cleanup_burden_proxy'] = round((float) ($draft_projection_quality['builder_draft_cleanup_burden_proxy'] ?? 0.0), 4);
+    $draft['ocr_review']['canonical_graph_source_of_truth'] = array(
+        'enabled' => true,
+        'deterministic_projection_version' => '1.0',
+        'hard_stop_targets_from' => 'ocr_canonical_form_graph.semantic_hard_stop_targets',
+        'hard_stops_from' => 'ocr_canonical_form_graph.semantic_hard_stop_targets',
+        'digital_twin_hints_from' => 'ocr_canonical_form_graph',
+        'grouped_controls_from' => 'digital_twin_hints.grouped_controls',
+        'approval_blocks_from' => 'digital_twin_hints.approval_blocks',
+    );
     $draft['ocr_review']['patched_graph_applied'] = !empty($canonical_graph['reviewer_patch']['applied']);
 
     return $draft;

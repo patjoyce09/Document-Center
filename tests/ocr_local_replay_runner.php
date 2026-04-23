@@ -134,49 +134,82 @@ function runner_parse_patch_categories_arg(string $raw): array {
     return array_values(array_unique($out));
 }
 
-function runner_collect_case_patch_categories(array $patch_payload): array {
+function runner_patch_row_category_values(array $row, bool $primary_only = false): array {
+    if (!is_array($row)) {
+        return array();
+    }
+
+    $values = array();
+    if ($primary_only) {
+        $values[] = $row['patch_primary_category'] ?? null;
+        $values[] = $row['primary_category'] ?? null;
+    } else {
+        $values[] = $row['patch_primary_category'] ?? null;
+        $values[] = $row['primary_category'] ?? null;
+        $values[] = $row['patch_category'] ?? null;
+        $values[] = $row['category'] ?? null;
+        if (isset($row['patch_categories'])) {
+            $values[] = $row['patch_categories'];
+        }
+        if (isset($row['categories'])) {
+            $values[] = $row['categories'];
+        }
+    }
+
+    $flat = array();
+    foreach ($values as $raw) {
+        if (is_array($raw)) {
+            foreach ($raw as $item) {
+                $flat[] = $item;
+            }
+        } elseif ($raw !== null) {
+            $flat[] = $raw;
+        }
+    }
+
+    return $flat;
+}
+
+function runner_collect_case_explicit_patch_categories(array $patch_payload): array {
     $allowed = array_fill_keys(runner_patch_categories_catalog(), true);
     $out = array();
 
     $explicit_sources = array();
-    if (isset($patch_payload['patch_categories'])) {
-        $explicit_sources[] = $patch_payload['patch_categories'];
+    foreach (array('patch_categories', 'categories', 'category', 'patch_primary_category', 'primary_category') as $key) {
+        if (isset($patch_payload[$key])) {
+            $explicit_sources[] = $patch_payload[$key];
+        }
     }
-    if (isset($patch_payload['categories'])) {
-        $explicit_sources[] = $patch_payload['categories'];
-    }
-    if (isset($patch_payload['category'])) {
-        $explicit_sources[] = $patch_payload['category'];
-    }
-    if (isset($patch_payload['patch_primary_category'])) {
-        $explicit_sources[] = $patch_payload['patch_primary_category'];
-    }
-    if (isset($patch_payload['primary_category'])) {
-        $explicit_sources[] = $patch_payload['primary_category'];
-    }
+
     $meta = isset($patch_payload['meta']) && is_array($patch_payload['meta']) ? $patch_payload['meta'] : array();
-    if (isset($meta['patch_categories'])) {
-        $explicit_sources[] = $meta['patch_categories'];
-    }
-    if (isset($meta['patch_primary_category'])) {
-        $explicit_sources[] = $meta['patch_primary_category'];
-    }
-    if (isset($meta['primary_category'])) {
-        $explicit_sources[] = $meta['primary_category'];
+    foreach (array('patch_categories', 'categories', 'category', 'patch_primary_category', 'primary_category') as $key) {
+        if (isset($meta[$key])) {
+            $explicit_sources[] = $meta[$key];
+        }
     }
 
     $canonical_patch = isset($patch_payload['canonical_graph_patch']) && is_array($patch_payload['canonical_graph_patch'])
         ? $patch_payload['canonical_graph_patch']
         : (isset($patch_payload['reviewer_canonical_graph_patch']) && is_array($patch_payload['reviewer_canonical_graph_patch']) ? $patch_payload['reviewer_canonical_graph_patch'] : array());
     $canonical_meta = isset($canonical_patch['meta']) && is_array($canonical_patch['meta']) ? $canonical_patch['meta'] : array();
-    if (isset($canonical_meta['patch_categories'])) {
-        $explicit_sources[] = $canonical_meta['patch_categories'];
+    foreach (array('patch_categories', 'categories', 'category', 'patch_primary_category', 'primary_category') as $key) {
+        if (isset($canonical_meta[$key])) {
+            $explicit_sources[] = $canonical_meta[$key];
+        }
     }
-    if (isset($canonical_meta['patch_primary_category'])) {
-        $explicit_sources[] = $canonical_meta['patch_primary_category'];
+
+    foreach ((array) ($patch_payload['candidate_fields'] ?? array()) as $candidate_row) {
+        foreach (runner_patch_row_category_values((array) $candidate_row) as $raw) {
+            $explicit_sources[] = $raw;
+        }
     }
-    if (isset($canonical_meta['primary_category'])) {
-        $explicit_sources[] = $canonical_meta['primary_category'];
+
+    foreach (array('widgets', 'relations', 'groups', 'approval_blocks') as $bucket_key) {
+        foreach ((array) ($canonical_patch[$bucket_key] ?? array()) as $row) {
+            foreach (runner_patch_row_category_values((array) $row) as $raw) {
+                $explicit_sources[] = $raw;
+            }
+        }
     }
 
     foreach ($explicit_sources as $raw) {
@@ -188,6 +221,77 @@ function runner_collect_case_patch_categories(array $patch_payload): array {
             }
         }
     }
+
+    return array_values(array_unique($out));
+}
+
+function runner_collect_case_explicit_patch_primary_candidates(array $patch_payload): array {
+    $out = array();
+
+    foreach (array(
+        $patch_payload['patch_primary_category'] ?? null,
+        $patch_payload['primary_category'] ?? null,
+        (is_array($patch_payload['meta'] ?? null) ? ($patch_payload['meta']['patch_primary_category'] ?? null) : null),
+        (is_array($patch_payload['meta'] ?? null) ? ($patch_payload['meta']['primary_category'] ?? null) : null),
+    ) as $raw) {
+        if ($raw === null) {
+            continue;
+        }
+        if (is_array($raw)) {
+            foreach ($raw as $row) {
+                $out[] = $row;
+            }
+        } else {
+            $out[] = $raw;
+        }
+    }
+
+    $canonical_patch = isset($patch_payload['canonical_graph_patch']) && is_array($patch_payload['canonical_graph_patch'])
+        ? $patch_payload['canonical_graph_patch']
+        : (isset($patch_payload['reviewer_canonical_graph_patch']) && is_array($patch_payload['reviewer_canonical_graph_patch']) ? $patch_payload['reviewer_canonical_graph_patch'] : array());
+    $canonical_meta = isset($canonical_patch['meta']) && is_array($canonical_patch['meta']) ? $canonical_patch['meta'] : array();
+    foreach (array($canonical_meta['patch_primary_category'] ?? null, $canonical_meta['primary_category'] ?? null) as $raw) {
+        if ($raw === null) {
+            continue;
+        }
+        if (is_array($raw)) {
+            foreach ($raw as $row) {
+                $out[] = $row;
+            }
+        } else {
+            $out[] = $raw;
+        }
+    }
+
+    foreach ((array) ($patch_payload['candidate_fields'] ?? array()) as $candidate_row) {
+        foreach (runner_patch_row_category_values((array) $candidate_row, true) as $raw) {
+            $out[] = $raw;
+        }
+    }
+
+    foreach (array('widgets', 'relations', 'groups', 'approval_blocks') as $bucket_key) {
+        foreach ((array) ($canonical_patch[$bucket_key] ?? array()) as $row) {
+            foreach (runner_patch_row_category_values((array) $row, true) as $raw) {
+                $out[] = $raw;
+            }
+        }
+    }
+
+    return $out;
+}
+
+function runner_collect_case_patch_categories(array $patch_payload): array {
+    $allowed = array_fill_keys(runner_patch_categories_catalog(), true);
+    $out = array();
+
+    $explicit = runner_collect_case_explicit_patch_categories($patch_payload);
+    if (!empty($explicit)) {
+        return $explicit;
+    }
+
+    $canonical_patch = isset($patch_payload['canonical_graph_patch']) && is_array($patch_payload['canonical_graph_patch'])
+        ? $patch_payload['canonical_graph_patch']
+        : (isset($patch_payload['reviewer_canonical_graph_patch']) && is_array($patch_payload['reviewer_canonical_graph_patch']) ? $patch_payload['reviewer_canonical_graph_patch'] : array());
 
     foreach ((array) ($patch_payload['candidate_fields'] ?? array()) as $candidate_row) {
         if (!is_array($candidate_row)) {
@@ -237,40 +341,18 @@ function runner_collect_case_patch_categories(array $patch_payload): array {
 function runner_collect_case_patch_primary_category(array $patch_payload, array $patch_categories = array()): string {
     $allowed = array_fill_keys(runner_patch_categories_catalog(), true);
 
-    $candidates = array();
-    foreach (array(
-        $patch_payload['patch_primary_category'] ?? null,
-        $patch_payload['primary_category'] ?? null,
-        (is_array($patch_payload['meta'] ?? null) ? ($patch_payload['meta']['patch_primary_category'] ?? null) : null),
-        (is_array($patch_payload['meta'] ?? null) ? ($patch_payload['meta']['primary_category'] ?? null) : null),
-    ) as $raw) {
-        if (is_array($raw)) {
-            foreach ($raw as $row) {
-                $candidates[] = $row;
-            }
-        } elseif ($raw !== null) {
-            $candidates[] = $raw;
-        }
-    }
-
-    $canonical_patch = isset($patch_payload['canonical_graph_patch']) && is_array($patch_payload['canonical_graph_patch'])
-        ? $patch_payload['canonical_graph_patch']
-        : (isset($patch_payload['reviewer_canonical_graph_patch']) && is_array($patch_payload['reviewer_canonical_graph_patch']) ? $patch_payload['reviewer_canonical_graph_patch'] : array());
-    $canonical_meta = isset($canonical_patch['meta']) && is_array($canonical_patch['meta']) ? $canonical_patch['meta'] : array();
-    foreach (array($canonical_meta['patch_primary_category'] ?? null, $canonical_meta['primary_category'] ?? null) as $raw) {
-        if (is_array($raw)) {
-            foreach ($raw as $row) {
-                $candidates[] = $row;
-            }
-        } elseif ($raw !== null) {
-            $candidates[] = $raw;
-        }
-    }
-
-    foreach ($candidates as $candidate) {
+    foreach (runner_collect_case_explicit_patch_primary_candidates($patch_payload) as $candidate) {
         $cat = sanitize_key((string) $candidate);
         if ($cat !== '' && isset($allowed[$cat])) {
             return $cat;
+        }
+    }
+
+    $explicit_categories = runner_collect_case_explicit_patch_categories($patch_payload);
+    if (!empty($explicit_categories)) {
+        $first_explicit = sanitize_key((string) $explicit_categories[0]);
+        if ($first_explicit !== '' && isset($allowed[$first_explicit])) {
+            return $first_explicit;
         }
     }
 
@@ -297,6 +379,14 @@ function runner_collect_case_patch_primary_category(array $patch_payload, array 
 function runner_patch_metric_sum_keys(): array {
     return array(
         'false_positive_count' => 'patch_false_positive_delta',
+        'generated_field_count_delta' => 'patch_generated_field_count_delta',
+        'generated_field_projection_quality' => 'patch_generated_field_projection_quality_delta',
+        'grouped_control_projection_quality' => 'patch_grouped_control_projection_quality_delta',
+        'approval_block_projection_quality' => 'patch_approval_block_projection_quality_delta',
+        'semantic_hard_stop_generation_coverage' => 'patch_semantic_hard_stop_generation_coverage_delta',
+        'patched_graph_to_draft_consistency' => 'patch_patched_graph_to_draft_consistency_delta',
+        'digital_twin_hint_completeness' => 'patch_digital_twin_hint_completeness_delta',
+        'builder_draft_cleanup_burden_proxy' => 'patch_builder_draft_cleanup_burden_proxy_delta',
         'approval_block_structural_quality' => 'patch_approval_block_structural_delta',
         'signature_endpoint_validity' => 'patch_signature_endpoint_validity_delta',
         'group_membership_completeness' => 'patch_group_membership_completeness_delta',
@@ -576,6 +666,410 @@ function runner_load_case_patch_map(string $patch_manifest_file, string $root): 
     return $out;
 }
 
+function runner_priority_runtime_rule_types(): array {
+    return array(
+        'approval_block_incomplete',
+        'signature_date_pair_missing',
+        'checkbox_group_incomplete',
+        'demographic_block_incomplete',
+        'sparse_form_critical_field_set_missing_field',
+    );
+}
+
+function runner_runtime_rule_type_normalize(string $rule_type): string {
+    $rule_type = sanitize_key($rule_type);
+    if ($rule_type === 'required_demographic_missing') {
+        return 'demographic_block_incomplete';
+    }
+    if ($rule_type === 'required_sparse_critical_missing') {
+        return 'sparse_form_critical_field_set_missing_field';
+    }
+    return $rule_type;
+}
+
+function runner_runtime_values_seed_from_draft(array $draft): array {
+    $values = array();
+    foreach ((array) ($draft['fields'] ?? array()) as $field_row) {
+        if (!is_array($field_row)) {
+            continue;
+        }
+        $key = sanitize_key((string) ($field_row['key'] ?? ''));
+        if ($key === '') {
+            continue;
+        }
+        $values[$key] = '';
+    }
+    return $values;
+}
+
+function runner_runtime_flip_value_for_condition(array $condition, string $current_value): string {
+    $operator = sanitize_key((string) ($condition['operator'] ?? 'eq'));
+    $target_value = isset($condition['value']) ? (string) $condition['value'] : '';
+    $target_values = isset($condition['values']) && is_array($condition['values'])
+        ? array_map('strval', $condition['values'])
+        : array();
+
+    switch ($operator) {
+        case 'not_filled':
+            return 'resolved';
+        case 'filled':
+            return '';
+        case 'eq':
+            return $current_value === $target_value ? '__resolved__' : $current_value;
+        case 'neq':
+            return $target_value;
+        case 'in':
+            return in_array($current_value, $target_values, true) ? '__resolved__' : $current_value;
+        case 'not_in':
+            return !empty($target_values) ? (string) $target_values[0] : 'allowed';
+        case 'gt':
+        case 'gte':
+            return is_numeric($target_value) ? (string) $target_value : '0';
+        case 'lt':
+        case 'lte':
+            if (is_numeric($target_value)) {
+                return (string) (((float) $target_value) + 1);
+            }
+            return '1';
+        default:
+            return '__resolved__';
+    }
+}
+
+function runner_runtime_collect_prioritized_triggers(array $draft, array $values): array {
+    $allowed_types = array_fill_keys(runner_priority_runtime_rule_types(), true);
+    $rows = array();
+
+    foreach ((array) ($draft['hard_stops'] ?? array()) as $stop_row) {
+        if (!is_array($stop_row)) {
+            continue;
+        }
+        $normalized_stop = dcb_normalize_hard_stop_rule($stop_row);
+        if ($normalized_stop === null) {
+            continue;
+        }
+        $semantic_target = isset($normalized_stop['semantic_target']) && is_array($normalized_stop['semantic_target'])
+            ? $normalized_stop['semantic_target']
+            : array();
+        $rule_type = runner_runtime_rule_type_normalize((string) ($semantic_target['rule_type'] ?? ($normalized_stop['type'] ?? '')));
+        if ($rule_type === '' || !isset($allowed_types[$rule_type])) {
+            continue;
+        }
+
+        $when = isset($normalized_stop['when']) && is_array($normalized_stop['when']) ? $normalized_stop['when'] : array();
+        if (empty($when)) {
+            continue;
+        }
+
+        $matched = true;
+        foreach ($when as $condition_row) {
+            if (!is_array($condition_row) || !dcb_condition_matches($condition_row, $values)) {
+                $matched = false;
+                break;
+            }
+        }
+        if (!$matched) {
+            continue;
+        }
+
+        $rows[] = array(
+            'rule_type' => $rule_type,
+            'message' => sanitize_text_field((string) ($normalized_stop['message'] ?? 'Hard-stop rule matched.')),
+            'when' => $when,
+        );
+    }
+
+    return $rows;
+}
+
+function runner_runtime_hard_stop_case_qa(array $draft): array {
+    $rule_types = runner_priority_runtime_rule_types();
+    $rule_set = array_fill_keys($rule_types, true);
+    $target_count_by_rule = array_fill_keys($rule_types, 0);
+    $rule_count_by_rule = array_fill_keys($rule_types, 0);
+    $triggered_count_by_rule = array_fill_keys($rule_types, 0);
+    $persistent_count_by_rule = array_fill_keys($rule_types, 0);
+
+    foreach ((array) ($draft['hard_stop_targets'] ?? array()) as $target_row) {
+        if (!is_array($target_row)) {
+            continue;
+        }
+        $rule_type = runner_runtime_rule_type_normalize((string) ($target_row['rule_type'] ?? ''));
+        if ($rule_type !== '' && isset($rule_set[$rule_type])) {
+            $target_count_by_rule[$rule_type]++;
+        }
+    }
+
+    foreach ((array) ($draft['hard_stops'] ?? array()) as $stop_row) {
+        if (!is_array($stop_row)) {
+            continue;
+        }
+        $normalized_stop = dcb_normalize_hard_stop_rule($stop_row);
+        if ($normalized_stop === null) {
+            continue;
+        }
+        $semantic_target = isset($normalized_stop['semantic_target']) && is_array($normalized_stop['semantic_target'])
+            ? $normalized_stop['semantic_target']
+            : array();
+        $rule_type = runner_runtime_rule_type_normalize((string) ($semantic_target['rule_type'] ?? ($normalized_stop['type'] ?? '')));
+        if ($rule_type !== '' && isset($rule_set[$rule_type])) {
+            $rule_count_by_rule[$rule_type]++;
+        }
+    }
+
+    $baseline_values = runner_runtime_values_seed_from_draft($draft);
+    $triggered_rows = runner_runtime_collect_prioritized_triggers($draft, $baseline_values);
+    foreach ($triggered_rows as $triggered_row) {
+        if (!is_array($triggered_row)) {
+            continue;
+        }
+        $rule_type = sanitize_key((string) ($triggered_row['rule_type'] ?? ''));
+        if ($rule_type !== '' && isset($triggered_count_by_rule[$rule_type])) {
+            $triggered_count_by_rule[$rule_type]++;
+        }
+    }
+
+    $corrected_values = $baseline_values;
+    foreach ($triggered_rows as $triggered_row) {
+        if (!is_array($triggered_row)) {
+            continue;
+        }
+        foreach ((array) ($triggered_row['when'] ?? array()) as $condition_row) {
+            if (!is_array($condition_row)) {
+                continue;
+            }
+            $field_key = sanitize_key((string) ($condition_row['field'] ?? ''));
+            if ($field_key === '') {
+                continue;
+            }
+            $current_value = isset($corrected_values[$field_key]) ? (string) $corrected_values[$field_key] : '';
+            $corrected_values[$field_key] = runner_runtime_flip_value_for_condition($condition_row, $current_value);
+        }
+    }
+
+    $persistent_rows = runner_runtime_collect_prioritized_triggers($draft, $corrected_values);
+    foreach ($persistent_rows as $persistent_row) {
+        if (!is_array($persistent_row)) {
+            continue;
+        }
+        $rule_type = sanitize_key((string) ($persistent_row['rule_type'] ?? ''));
+        if ($rule_type !== '' && isset($persistent_count_by_rule[$rule_type])) {
+            $persistent_count_by_rule[$rule_type]++;
+        }
+    }
+
+    $cleared_count_by_rule = array_fill_keys($rule_types, 0);
+    $likely_true_positive_by_rule = array_fill_keys($rule_types, 0);
+    $noisy_by_rule = array_fill_keys($rule_types, 0);
+    $missing_by_rule = array_fill_keys($rule_types, 0);
+    $noisy_rule_types = array();
+    $missing_rule_types = array();
+
+    $triggered_total = 0;
+    $persistent_total = 0;
+    foreach ($rule_types as $rule_type) {
+        $triggered = max(0, (int) ($triggered_count_by_rule[$rule_type] ?? 0));
+        $persistent = max(0, (int) ($persistent_count_by_rule[$rule_type] ?? 0));
+        $cleared = max(0, $triggered - $persistent);
+        $target_count = max(0, (int) ($target_count_by_rule[$rule_type] ?? 0));
+
+        $cleared_count_by_rule[$rule_type] = $cleared;
+        $triggered_total += $triggered;
+        $persistent_total += $persistent;
+
+        if ($triggered > 0 && $target_count > 0) {
+            $likely_true_positive_by_rule[$rule_type] = $triggered;
+        }
+        if ($triggered > 0 && $target_count === 0) {
+            $noisy_by_rule[$rule_type] = $triggered;
+            $noisy_rule_types[] = $rule_type;
+        }
+        if ($target_count > 0 && $triggered === 0) {
+            $missing_by_rule[$rule_type] = $target_count;
+            $missing_rule_types[] = $rule_type;
+        }
+    }
+
+    $result = array(
+        'prioritized_rule_types' => $rule_types,
+        'target_count_by_rule' => $target_count_by_rule,
+        'rule_count_by_rule' => $rule_count_by_rule,
+        'triggered_count_by_rule' => $triggered_count_by_rule,
+        'cleared_after_correction_count_by_rule' => $cleared_count_by_rule,
+        'persistent_after_correction_count_by_rule' => $persistent_count_by_rule,
+        'likely_true_positive_count_by_rule' => $likely_true_positive_by_rule,
+        'noisy_count_by_rule' => $noisy_by_rule,
+        'missing_count_by_rule' => $missing_by_rule,
+        'noisy_rule_types' => array_values(array_unique($noisy_rule_types)),
+        'missing_rule_types' => array_values(array_unique($missing_rule_types)),
+        'triggered_total' => $triggered_total,
+        'cleared_after_correction_total' => max(0, $triggered_total - $persistent_total),
+        'persistent_after_correction_total' => $persistent_total,
+        'submit_blocked_proxy' => $triggered_total > 0,
+        'submit_blocked_after_correction_proxy' => $persistent_total > 0,
+    );
+
+    return $result;
+}
+
+function runner_runtime_hard_stop_delta(array $baseline, array $patched): array {
+    $rule_types = runner_priority_runtime_rule_types();
+    $delta_triggered = array_fill_keys($rule_types, 0);
+    $delta_cleared = array_fill_keys($rule_types, 0);
+    $delta_persistent = array_fill_keys($rule_types, 0);
+
+    foreach ($rule_types as $rule_type) {
+        $delta_triggered[$rule_type] = (int) (($patched['triggered_count_by_rule'][$rule_type] ?? 0) - ($baseline['triggered_count_by_rule'][$rule_type] ?? 0));
+        $delta_cleared[$rule_type] = (int) (($patched['cleared_after_correction_count_by_rule'][$rule_type] ?? 0) - ($baseline['cleared_after_correction_count_by_rule'][$rule_type] ?? 0));
+        $delta_persistent[$rule_type] = (int) (($patched['persistent_after_correction_count_by_rule'][$rule_type] ?? 0) - ($baseline['persistent_after_correction_count_by_rule'][$rule_type] ?? 0));
+    }
+
+    return array(
+        'triggered_count_by_rule' => $delta_triggered,
+        'cleared_after_correction_count_by_rule' => $delta_cleared,
+        'persistent_after_correction_count_by_rule' => $delta_persistent,
+        'triggered_total' => (int) (($patched['triggered_total'] ?? 0) - ($baseline['triggered_total'] ?? 0)),
+        'cleared_after_correction_total' => (int) (($patched['cleared_after_correction_total'] ?? 0) - ($baseline['cleared_after_correction_total'] ?? 0)),
+        'persistent_after_correction_total' => (int) (($patched['persistent_after_correction_total'] ?? 0) - ($baseline['persistent_after_correction_total'] ?? 0)),
+        'submit_blocked_proxy_delta' => ((int) !empty($patched['submit_blocked_proxy'])) - ((int) !empty($baseline['submit_blocked_proxy'])),
+        'submit_blocked_after_correction_proxy_delta' => ((int) !empty($patched['submit_blocked_after_correction_proxy'])) - ((int) !empty($baseline['submit_blocked_after_correction_proxy'])),
+    );
+}
+
+function runner_runtime_summary_init(): array {
+    $rule_types = runner_priority_runtime_rule_types();
+    $zero_map = array_fill_keys($rule_types, 0);
+
+    return array(
+        'prioritized_rule_types' => $rule_types,
+        'case_counts' => array(
+            'baseline' => 0,
+            'patched' => 0,
+        ),
+        'baseline' => array(
+            'triggered_count_by_rule' => $zero_map,
+            'cleared_after_correction_count_by_rule' => $zero_map,
+            'persistent_after_correction_count_by_rule' => $zero_map,
+            'target_count_by_rule' => $zero_map,
+            'cases_with_trigger_by_rule' => $zero_map,
+            'cases_with_noisy_by_rule' => $zero_map,
+            'cases_with_missing_by_rule' => $zero_map,
+            'triggered_total' => 0,
+            'cleared_after_correction_total' => 0,
+            'persistent_after_correction_total' => 0,
+            'submit_blocked_proxy_count' => 0,
+            'submit_blocked_after_correction_proxy_count' => 0,
+        ),
+        'patched' => array(
+            'triggered_count_by_rule' => $zero_map,
+            'cleared_after_correction_count_by_rule' => $zero_map,
+            'persistent_after_correction_count_by_rule' => $zero_map,
+            'target_count_by_rule' => $zero_map,
+            'cases_with_trigger_by_rule' => $zero_map,
+            'cases_with_noisy_by_rule' => $zero_map,
+            'cases_with_missing_by_rule' => $zero_map,
+            'triggered_total' => 0,
+            'cleared_after_correction_total' => 0,
+            'persistent_after_correction_total' => 0,
+            'submit_blocked_proxy_count' => 0,
+            'submit_blocked_after_correction_proxy_count' => 0,
+        ),
+    );
+}
+
+function runner_runtime_summary_accumulate(array &$runtime_summary, string $mode, array $qa): void {
+    if (!in_array($mode, array('baseline', 'patched'), true)) {
+        return;
+    }
+
+    $rule_types = runner_priority_runtime_rule_types();
+    if (!isset($runtime_summary[$mode]) || !is_array($runtime_summary[$mode])) {
+        return;
+    }
+    if (!isset($runtime_summary['case_counts'][$mode])) {
+        $runtime_summary['case_counts'][$mode] = 0;
+    }
+    $runtime_summary['case_counts'][$mode]++;
+
+    $runtime_summary[$mode]['triggered_total'] += max(0, (int) ($qa['triggered_total'] ?? 0));
+    $runtime_summary[$mode]['cleared_after_correction_total'] += max(0, (int) ($qa['cleared_after_correction_total'] ?? 0));
+    $runtime_summary[$mode]['persistent_after_correction_total'] += max(0, (int) ($qa['persistent_after_correction_total'] ?? 0));
+    if (!empty($qa['submit_blocked_proxy'])) {
+        $runtime_summary[$mode]['submit_blocked_proxy_count']++;
+    }
+    if (!empty($qa['submit_blocked_after_correction_proxy'])) {
+        $runtime_summary[$mode]['submit_blocked_after_correction_proxy_count']++;
+    }
+
+    foreach ($rule_types as $rule_type) {
+        $triggered = max(0, (int) ($qa['triggered_count_by_rule'][$rule_type] ?? 0));
+        $cleared = max(0, (int) ($qa['cleared_after_correction_count_by_rule'][$rule_type] ?? 0));
+        $persistent = max(0, (int) ($qa['persistent_after_correction_count_by_rule'][$rule_type] ?? 0));
+        $target_count = max(0, (int) ($qa['target_count_by_rule'][$rule_type] ?? 0));
+
+        $runtime_summary[$mode]['triggered_count_by_rule'][$rule_type] += $triggered;
+        $runtime_summary[$mode]['cleared_after_correction_count_by_rule'][$rule_type] += $cleared;
+        $runtime_summary[$mode]['persistent_after_correction_count_by_rule'][$rule_type] += $persistent;
+        $runtime_summary[$mode]['target_count_by_rule'][$rule_type] += $target_count;
+
+        if ($triggered > 0) {
+            $runtime_summary[$mode]['cases_with_trigger_by_rule'][$rule_type]++;
+        }
+        if (in_array($rule_type, (array) ($qa['noisy_rule_types'] ?? array()), true)) {
+            $runtime_summary[$mode]['cases_with_noisy_by_rule'][$rule_type]++;
+        }
+        if (in_array($rule_type, (array) ($qa['missing_rule_types'] ?? array()), true)) {
+            $runtime_summary[$mode]['cases_with_missing_by_rule'][$rule_type]++;
+        }
+    }
+}
+
+function runner_runtime_summary_finalize(array $runtime_summary): array {
+    $rule_types = runner_priority_runtime_rule_types();
+    $baseline_cases = max(1, (int) ($runtime_summary['case_counts']['baseline'] ?? 0));
+    $patched_cases = max(1, (int) ($runtime_summary['case_counts']['patched'] ?? 0));
+
+    $delta = array(
+        'triggered_count_by_rule' => array_fill_keys($rule_types, 0),
+        'cleared_after_correction_count_by_rule' => array_fill_keys($rule_types, 0),
+        'persistent_after_correction_count_by_rule' => array_fill_keys($rule_types, 0),
+        'triggered_total' => 0,
+        'cleared_after_correction_total' => 0,
+        'persistent_after_correction_total' => 0,
+        'submit_blocked_proxy_count' => 0,
+        'submit_blocked_after_correction_proxy_count' => 0,
+    );
+
+    foreach ($rule_types as $rule_type) {
+        $delta['triggered_count_by_rule'][$rule_type] = (int) (($runtime_summary['patched']['triggered_count_by_rule'][$rule_type] ?? 0) - ($runtime_summary['baseline']['triggered_count_by_rule'][$rule_type] ?? 0));
+        $delta['cleared_after_correction_count_by_rule'][$rule_type] = (int) (($runtime_summary['patched']['cleared_after_correction_count_by_rule'][$rule_type] ?? 0) - ($runtime_summary['baseline']['cleared_after_correction_count_by_rule'][$rule_type] ?? 0));
+        $delta['persistent_after_correction_count_by_rule'][$rule_type] = (int) (($runtime_summary['patched']['persistent_after_correction_count_by_rule'][$rule_type] ?? 0) - ($runtime_summary['baseline']['persistent_after_correction_count_by_rule'][$rule_type] ?? 0));
+    }
+
+    $delta['triggered_total'] = (int) (($runtime_summary['patched']['triggered_total'] ?? 0) - ($runtime_summary['baseline']['triggered_total'] ?? 0));
+    $delta['cleared_after_correction_total'] = (int) (($runtime_summary['patched']['cleared_after_correction_total'] ?? 0) - ($runtime_summary['baseline']['cleared_after_correction_total'] ?? 0));
+    $delta['persistent_after_correction_total'] = (int) (($runtime_summary['patched']['persistent_after_correction_total'] ?? 0) - ($runtime_summary['baseline']['persistent_after_correction_total'] ?? 0));
+    $delta['submit_blocked_proxy_count'] = (int) (($runtime_summary['patched']['submit_blocked_proxy_count'] ?? 0) - ($runtime_summary['baseline']['submit_blocked_proxy_count'] ?? 0));
+    $delta['submit_blocked_after_correction_proxy_count'] = (int) (($runtime_summary['patched']['submit_blocked_after_correction_proxy_count'] ?? 0) - ($runtime_summary['baseline']['submit_blocked_after_correction_proxy_count'] ?? 0));
+
+    $runtime_summary['baseline']['avg_triggered_total_per_case'] = round(((float) ($runtime_summary['baseline']['triggered_total'] ?? 0.0)) / $baseline_cases, 4);
+    $runtime_summary['patched']['avg_triggered_total_per_case'] = round(((float) ($runtime_summary['patched']['triggered_total'] ?? 0.0)) / $patched_cases, 4);
+    $runtime_summary['baseline']['submit_blocked_proxy_rate'] = round(((float) ($runtime_summary['baseline']['submit_blocked_proxy_count'] ?? 0.0)) / $baseline_cases, 4);
+    $runtime_summary['patched']['submit_blocked_proxy_rate'] = round(((float) ($runtime_summary['patched']['submit_blocked_proxy_count'] ?? 0.0)) / $patched_cases, 4);
+    $runtime_summary['baseline']['submit_blocked_after_correction_proxy_rate'] = round(((float) ($runtime_summary['baseline']['submit_blocked_after_correction_proxy_count'] ?? 0.0)) / $baseline_cases, 4);
+    $runtime_summary['patched']['submit_blocked_after_correction_proxy_rate'] = round(((float) ($runtime_summary['patched']['submit_blocked_after_correction_proxy_count'] ?? 0.0)) / $patched_cases, 4);
+
+    $runtime_summary['delta'] = $delta;
+    $runtime_summary['submit_reject_proxy_delta'] = array(
+        'before_correction' => $delta['submit_blocked_proxy_count'],
+        'after_correction' => $delta['submit_blocked_after_correction_proxy_count'],
+        'before_correction_rate' => round(((float) ($runtime_summary['patched']['submit_blocked_proxy_rate'] ?? 0.0)) - ((float) ($runtime_summary['baseline']['submit_blocked_proxy_rate'] ?? 0.0)), 4),
+        'after_correction_rate' => round(((float) ($runtime_summary['patched']['submit_blocked_after_correction_proxy_rate'] ?? 0.0)) - ((float) ($runtime_summary['baseline']['submit_blocked_after_correction_proxy_rate'] ?? 0.0)), 4),
+    );
+
+    return $runtime_summary;
+}
+
 function runner_apply_case_patch_payload(array $extraction, array $draft, array $patch_payload): array {
     $patched_extraction = $extraction;
     $patched_draft = $draft;
@@ -627,10 +1121,45 @@ function runner_apply_case_patch_payload(array $extraction, array $draft, array 
         $applied = true;
     }
 
-    $patched_draft['hard_stops'] = isset($patched_extraction['ocr_canonical_form_graph']['semantic_hard_stop_anchors'])
-        && is_array($patched_extraction['ocr_canonical_form_graph']['semantic_hard_stop_anchors'])
-        ? $patched_extraction['ocr_canonical_form_graph']['semantic_hard_stop_anchors']
-        : array();
+    if (!empty($canonical_patch) && isset($patched_extraction['ocr_canonical_form_graph']) && is_array($patched_extraction['ocr_canonical_form_graph'])) {
+        $canonical_graph = $patched_extraction['ocr_canonical_form_graph'];
+
+        $patched_draft['ocr_canonical_form_graph'] = $canonical_graph;
+        $patched_draft['fields'] = dcb_ocr_project_draft_fields_from_canonical_graph(
+            isset($patched_draft['fields']) && is_array($patched_draft['fields']) ? $patched_draft['fields'] : array(),
+            $canonical_graph
+        );
+        $patched_draft['hard_stop_anchors'] = isset($canonical_graph['semantic_hard_stop_anchors']) && is_array($canonical_graph['semantic_hard_stop_anchors'])
+            ? $canonical_graph['semantic_hard_stop_anchors']
+            : array();
+        $patched_draft['hard_stop_targets'] = isset($canonical_graph['semantic_hard_stop_targets']) && is_array($canonical_graph['semantic_hard_stop_targets'])
+            ? $canonical_graph['semantic_hard_stop_targets']
+            : dcb_ocr_build_hard_stop_targets_from_semantic_anchors((array) ($patched_draft['hard_stop_anchors'] ?? array()));
+        $patched_draft['hard_stops'] = dcb_ocr_generate_hard_stops_from_semantic_targets(
+            (array) ($patched_draft['hard_stop_targets'] ?? array()),
+            $canonical_graph,
+            isset($patched_draft['fields']) && is_array($patched_draft['fields']) ? $patched_draft['fields'] : array(),
+            isset($patched_draft['hard_stops']) && is_array($patched_draft['hard_stops']) ? $patched_draft['hard_stops'] : array()
+        );
+        $patched_draft['digital_twin_hints'] = dcb_ocr_merge_digital_twin_hints_with_canonical_graph(
+            isset($patched_draft['digital_twin_hints']) && is_array($patched_draft['digital_twin_hints']) ? $patched_draft['digital_twin_hints'] : array(),
+            $canonical_graph,
+            isset($patched_draft['fields']) && is_array($patched_draft['fields']) ? $patched_draft['fields'] : array()
+        );
+        $patched_draft['grouped_controls'] = isset($patched_draft['digital_twin_hints']['grouped_controls']) && is_array($patched_draft['digital_twin_hints']['grouped_controls'])
+            ? $patched_draft['digital_twin_hints']['grouped_controls']
+            : array();
+        $patched_draft['approval_blocks'] = isset($patched_draft['digital_twin_hints']['approval_blocks']) && is_array($patched_draft['digital_twin_hints']['approval_blocks'])
+            ? $patched_draft['digital_twin_hints']['approval_blocks']
+            : array();
+        $patched_draft['draft_projection_quality'] = dcb_ocr_build_draft_projection_quality(
+            isset($patched_draft['fields']) && is_array($patched_draft['fields']) ? $patched_draft['fields'] : array(),
+            $canonical_graph,
+            (array) ($patched_draft['hard_stop_targets'] ?? array()),
+            (array) ($patched_draft['hard_stops'] ?? array()),
+            isset($patched_draft['digital_twin_hints']) && is_array($patched_draft['digital_twin_hints']) ? $patched_draft['digital_twin_hints'] : array()
+        );
+    }
 
     return array(
         'extraction' => $patched_extraction,
@@ -902,6 +1431,29 @@ function runner_case_metrics(array $case, array $draft, array $extraction, array
     $cleanup_burden_proxy_fields = round($false_positive_count / max(1, count($pred)), 4);
     $cleanup_burden = max($cleanup_burden_proxy_draft, $cleanup_burden_proxy_quality, $cleanup_burden_proxy_fields);
 
+    $projection_quality = isset($draft['draft_projection_quality']) && is_array($draft['draft_projection_quality'])
+        ? $draft['draft_projection_quality']
+        : dcb_ocr_build_draft_projection_quality(
+            isset($draft['fields']) && is_array($draft['fields']) ? $draft['fields'] : array(),
+            $canonical_graph,
+            isset($draft['hard_stop_targets']) && is_array($draft['hard_stop_targets']) ? $draft['hard_stop_targets'] : array(),
+            isset($draft['hard_stops']) && is_array($draft['hard_stops']) ? $draft['hard_stops'] : array(),
+            isset($draft['digital_twin_hints']) && is_array($draft['digital_twin_hints']) ? $draft['digital_twin_hints'] : array()
+        );
+
+    $generated_field_count_delta = (int) ($projection_quality['generated_field_count_delta'] ?? 0);
+    $generated_field_projection_quality = round(max(0.0, min(1.0, (float) ($projection_quality['generated_field_projection_quality'] ?? 0.0))), 4);
+    $grouped_control_projection_quality = round(max(0.0, min(1.0, (float) ($projection_quality['grouped_control_projection_quality'] ?? 0.0))), 4);
+    $approval_block_projection_quality = round(max(0.0, min(1.0, (float) ($projection_quality['approval_block_projection_quality'] ?? 0.0))), 4);
+    $semantic_hard_stop_generation_coverage = round(max(0.0, min(1.0, (float) ($projection_quality['semantic_hard_stop_generation_coverage'] ?? 0.0))), 4);
+    $patched_graph_to_draft_consistency = round(max(0.0, min(1.0, (float) ($projection_quality['patched_graph_to_draft_consistency'] ?? 0.0))), 4);
+    $digital_twin_hint_completeness = round(max(0.0, min(1.0, (float) ($projection_quality['digital_twin_hint_completeness'] ?? 0.0))), 4);
+    $builder_draft_cleanup_burden_proxy = round(max(0.0, min(1.0, (float) ($projection_quality['builder_draft_cleanup_burden_proxy'] ?? $cleanup_burden))), 4);
+    $draft_grouped_control_count = count((array) ($draft['grouped_controls'] ?? array()));
+    $draft_approval_block_count = count((array) ($draft['approval_blocks'] ?? array()));
+    $draft_hard_stop_target_count = count((array) ($draft['hard_stop_targets'] ?? array()));
+    $draft_hard_stop_rule_count = count((array) ($draft['hard_stops'] ?? array()));
+
     $canonical_rel = max(0, (int) ($quality_metrics['canonical_relation_count'] ?? 0));
     $canonical_pages = max(0, (int) ($quality_metrics['canonical_page_count'] ?? 0));
     $widget_count = max(0, (int) ($quality_metrics['widget_candidate_count'] ?? count($pred)));
@@ -947,6 +1499,14 @@ function runner_case_metrics(array $case, array $draft, array $extraction, array
             'relation_accuracy_by_type' => $relation_accuracy_by_type,
             'sparse_critical_field_set_completeness' => $sparse_critical_field_set_completeness,
             'cleanup_burden' => $cleanup_burden,
+            'generated_field_count_delta' => $generated_field_count_delta,
+            'generated_field_projection_quality' => $generated_field_projection_quality,
+            'grouped_control_projection_quality' => $grouped_control_projection_quality,
+            'approval_block_projection_quality' => $approval_block_projection_quality,
+            'semantic_hard_stop_generation_coverage' => $semantic_hard_stop_generation_coverage,
+            'patched_graph_to_draft_consistency' => $patched_graph_to_draft_consistency,
+            'digital_twin_hint_completeness' => $digital_twin_hint_completeness,
+            'builder_draft_cleanup_burden_proxy' => $builder_draft_cleanup_burden_proxy,
             'canonical_graph_completeness' => $canonical_graph_completeness,
             'hard_stop_anchor_coverage' => $hard_stop_anchor_coverage,
         ),
@@ -957,6 +1517,8 @@ function runner_case_metrics(array $case, array $draft, array $extraction, array
             'case_id' => $case_id,
             'label' => $label,
             'fixture_type' => sanitize_key((string) ($case['fixture_type'] ?? 'realworld')),
+            'form_family' => sanitize_key((string) ($case['form_family'] ?? '')),
+            'document_type' => sanitize_key((string) ($case['document_type'] ?? '')),
             'source_quality' => sanitize_key((string) ($case['source_quality'] ?? 'unknown')),
             'dense_vs_sparse' => $dense_vs_sparse,
             'sparse_form_false_positive_count' => $is_sparse_case ? $false_positive_count : 0,
@@ -997,12 +1559,24 @@ function runner_case_metrics(array $case, array $draft, array $extraction, array
             'relation_accuracy_by_type' => $relation_accuracy_by_type,
             'sparse_critical_field_set_completeness' => $sparse_critical_field_set_completeness,
             'review_cleanup_burden_proxy' => $cleanup_burden,
+            'generated_field_count_delta' => $generated_field_count_delta,
+            'generated_field_projection_quality' => $generated_field_projection_quality,
+            'grouped_control_projection_quality' => $grouped_control_projection_quality,
+            'approval_block_projection_quality' => $approval_block_projection_quality,
+            'semantic_hard_stop_generation_coverage' => $semantic_hard_stop_generation_coverage,
+            'patched_graph_to_draft_consistency' => $patched_graph_to_draft_consistency,
+            'digital_twin_hint_completeness' => $digital_twin_hint_completeness,
+            'builder_draft_cleanup_burden_proxy' => $builder_draft_cleanup_burden_proxy,
             'canonical_graph_completeness_proxy' => $canonical_graph_completeness,
             'hard_stop_anchor_coverage_proxy' => $hard_stop_anchor_coverage,
             'yes_no_group_count' => $yes_no_actual,
             'checkbox_group_count' => $checkbox_actual,
             'signature_pair_count' => $signature_pair_actual,
             'approval_block_count' => $approval_block_count,
+            'draft_grouped_control_count' => $draft_grouped_control_count,
+            'draft_approval_block_count' => $draft_approval_block_count,
+            'draft_hard_stop_target_count' => $draft_hard_stop_target_count,
+            'draft_hard_stop_rule_count' => $draft_hard_stop_rule_count,
             'paired_relation_count' => $paired_relations,
             'paired_relation_valid_endpoint_count' => $paired_valid_endpoints,
             'relation_type_counts' => $relation_type_counts,
@@ -1012,6 +1586,7 @@ function runner_case_metrics(array $case, array $draft, array $extraction, array
                 'canonical_relation_count' => $canonical_rel,
                 'canonical_page_count' => $canonical_pages,
             ),
+            'draft_projection_quality' => $projection_quality,
             'page_reports' => runner_page_reports($extraction),
         ),
     );
@@ -1059,6 +1634,11 @@ function runner_parse_args(array $argv): array {
         }
         if (strpos($v, '--patch-category=') === 0) {
             $raw_categories = trim(substr($v, strlen('--patch-category=')));
+            $args['patch_categories'] = runner_parse_patch_categories_arg($raw_categories);
+            continue;
+        }
+        if (strpos($v, '--patch-categories=') === 0) {
+            $raw_categories = trim(substr($v, strlen('--patch-categories=')));
             $args['patch_categories'] = runner_parse_patch_categories_arg($raw_categories);
             continue;
         }
@@ -1153,6 +1733,14 @@ $agg = array(
     'relation_accuracy_by_type' => 0.0,
     'sparse_critical_field_set_completeness' => 0.0,
     'review_cleanup_burden_proxy' => 0.0,
+    'avg_generated_field_count_delta' => 0.0,
+    'generated_field_projection_quality' => 0.0,
+    'grouped_control_projection_quality' => 0.0,
+    'approval_block_projection_quality' => 0.0,
+    'semantic_hard_stop_generation_coverage' => 0.0,
+    'patched_graph_to_draft_consistency' => 0.0,
+    'digital_twin_hint_completeness' => 0.0,
+    'builder_draft_cleanup_burden_proxy' => 0.0,
     'canonical_graph_completeness_proxy' => 0.0,
     'hard_stop_anchor_coverage_proxy' => 0.0,
     'local_ocr_readiness' => $local_ocr_readiness,
@@ -1160,6 +1748,7 @@ $agg = array(
         'enabled' => $patch_eval_enabled,
         'patch_manifest' => $patch_manifest_file !== '' ? runner_rel_path($patch_manifest_file, $root) : '',
         'patch_category_filter' => isset($args['patch_categories']) && is_array($args['patch_categories']) ? array_values($args['patch_categories']) : array(),
+        'category_attribution_mode' => 'primary_preferred_with_inference_fallback',
         'cases_with_patch_available' => 0,
         'cases_with_patch' => 0,
         'cases_with_patch_applied' => 0,
@@ -1174,6 +1763,14 @@ $agg = array(
         'avg_fillable_fixed_classification_delta' => 0.0,
         'avg_relation_accuracy_by_type_delta' => 0.0,
         'avg_sparse_critical_field_set_delta' => 0.0,
+        'avg_generated_field_count_delta' => 0.0,
+        'avg_generated_field_projection_quality_delta' => 0.0,
+        'avg_grouped_control_projection_quality_delta' => 0.0,
+        'avg_approval_block_projection_quality_delta' => 0.0,
+        'avg_semantic_hard_stop_generation_coverage_delta' => 0.0,
+        'avg_patched_graph_to_draft_consistency_delta' => 0.0,
+        'avg_digital_twin_hint_completeness_delta' => 0.0,
+        'avg_builder_draft_cleanup_burden_proxy_delta' => 0.0,
         'avg_canonical_relation_delta' => 0.0,
         'avg_hard_stop_anchor_coverage_delta' => 0.0,
         'avg_rejected_patch_items' => 0.0,
@@ -1207,6 +1804,14 @@ $sum = array(
     'relation_accuracy_by_type' => 0.0,
     'sparse_critical_field_set_completeness' => 0.0,
     'cleanup_burden' => 0.0,
+    'generated_field_count_delta' => 0.0,
+    'generated_field_projection_quality' => 0.0,
+    'grouped_control_projection_quality' => 0.0,
+    'approval_block_projection_quality' => 0.0,
+    'semantic_hard_stop_generation_coverage' => 0.0,
+    'patched_graph_to_draft_consistency' => 0.0,
+    'digital_twin_hint_completeness' => 0.0,
+    'builder_draft_cleanup_burden_proxy' => 0.0,
     'canonical_graph_completeness' => 0.0,
     'hard_stop_anchor_coverage' => 0.0,
     'patch_false_positive_delta' => 0.0,
@@ -1220,10 +1825,20 @@ $sum = array(
     'patch_fillable_fixed_classification_delta' => 0.0,
     'patch_relation_accuracy_by_type_delta' => 0.0,
     'patch_sparse_critical_field_set_delta' => 0.0,
+    'patch_generated_field_count_delta' => 0.0,
+    'patch_generated_field_projection_quality_delta' => 0.0,
+    'patch_grouped_control_projection_quality_delta' => 0.0,
+    'patch_approval_block_projection_quality_delta' => 0.0,
+    'patch_semantic_hard_stop_generation_coverage_delta' => 0.0,
+    'patch_patched_graph_to_draft_consistency_delta' => 0.0,
+    'patch_digital_twin_hint_completeness_delta' => 0.0,
+    'patch_builder_draft_cleanup_burden_proxy_delta' => 0.0,
     'patch_canonical_relation_delta' => 0.0,
     'patch_hard_stop_anchor_coverage_delta' => 0.0,
     'patch_rejected_items' => 0.0,
 );
+
+$runtime_summary = runner_runtime_summary_init();
 
 $case_reports = array();
 
@@ -1340,6 +1955,11 @@ foreach ($cases as $case) {
     }
 
     $case_report = isset($metrics['report']) && is_array($metrics['report']) ? $metrics['report'] : array();
+    $baseline_runtime_qa = runner_runtime_hard_stop_case_qa($draft);
+    $case_report['runtime_hard_stop_qa'] = array(
+        'baseline' => $baseline_runtime_qa,
+    );
+    runner_runtime_summary_accumulate($runtime_summary, 'baseline', $baseline_runtime_qa);
 
     $case_id = sanitize_key((string) ($case['case_id'] ?? ($case['id'] ?? '')));
     if ($patch_eval_enabled && $case_id !== '' && isset($patch_map[$case_id]) && is_array($patch_map[$case_id])) {
@@ -1371,6 +1991,8 @@ foreach ($cases as $case) {
         $patched_extraction = isset($patch_eval['extraction']) && is_array($patch_eval['extraction']) ? $patch_eval['extraction'] : $extraction;
         $patched_draft = isset($patch_eval['draft']) && is_array($patch_eval['draft']) ? $patch_eval['draft'] : $draft;
         $patched_metrics = runner_case_metrics($case, $patched_draft, $patched_extraction, $diag, $root, $binary_path, $replay_mode, $binary_exists, $sample_exists);
+        $patched_runtime_qa = runner_runtime_hard_stop_case_qa($patched_draft);
+        runner_runtime_summary_accumulate($runtime_summary, 'patched', $patched_runtime_qa);
 
         $baseline_false_positive = max(0.0, (float) ($metrics['sum']['false_positive'] ?? 0.0));
         $patched_false_positive = max(0.0, (float) ($patched_metrics['sum']['false_positive'] ?? 0.0));
@@ -1396,21 +2018,70 @@ foreach ($cases as $case) {
         $patched_relation_by_type = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['relation_accuracy_by_type'] ?? 0.0))), 4);
         $baseline_sparse_critical = round(max(0.0, min(1.0, (float) ($metrics['sum']['sparse_critical_field_set_completeness'] ?? 0.0))), 4);
         $patched_sparse_critical = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['sparse_critical_field_set_completeness'] ?? 0.0))), 4);
+        $baseline_generated_field_count_delta = (int) ($metrics['sum']['generated_field_count_delta'] ?? 0);
+        $patched_generated_field_count_delta = (int) ($patched_metrics['sum']['generated_field_count_delta'] ?? 0);
+        $baseline_generated_field_projection = round(max(0.0, min(1.0, (float) ($metrics['sum']['generated_field_projection_quality'] ?? 0.0))), 4);
+        $patched_generated_field_projection = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['generated_field_projection_quality'] ?? 0.0))), 4);
+        $baseline_grouped_control_projection = round(max(0.0, min(1.0, (float) ($metrics['sum']['grouped_control_projection_quality'] ?? 0.0))), 4);
+        $patched_grouped_control_projection = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['grouped_control_projection_quality'] ?? 0.0))), 4);
+        $baseline_approval_projection = round(max(0.0, min(1.0, (float) ($metrics['sum']['approval_block_projection_quality'] ?? 0.0))), 4);
+        $patched_approval_projection = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['approval_block_projection_quality'] ?? 0.0))), 4);
+        $baseline_semantic_hard_stop_generation = round(max(0.0, min(1.0, (float) ($metrics['sum']['semantic_hard_stop_generation_coverage'] ?? 0.0))), 4);
+        $patched_semantic_hard_stop_generation = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['semantic_hard_stop_generation_coverage'] ?? 0.0))), 4);
+        $baseline_patched_to_draft_consistency = round(max(0.0, min(1.0, (float) ($metrics['sum']['patched_graph_to_draft_consistency'] ?? 0.0))), 4);
+        $patched_patched_to_draft_consistency = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['patched_graph_to_draft_consistency'] ?? 0.0))), 4);
+        $baseline_digital_twin_hint_completeness = round(max(0.0, min(1.0, (float) ($metrics['sum']['digital_twin_hint_completeness'] ?? 0.0))), 4);
+        $patched_digital_twin_hint_completeness = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['digital_twin_hint_completeness'] ?? 0.0))), 4);
+        $baseline_builder_cleanup = round(max(0.0, min(1.0, (float) ($metrics['sum']['builder_draft_cleanup_burden_proxy'] ?? 0.0))), 4);
+        $patched_builder_cleanup = round(max(0.0, min(1.0, (float) ($patched_metrics['sum']['builder_draft_cleanup_burden_proxy'] ?? 0.0))), 4);
 
         $baseline_rel = max(0, (int) ($metrics['report']['quality_metrics']['canonical_relation_count'] ?? 0));
         $patched_rel = max(0, (int) ($patched_metrics['report']['quality_metrics']['canonical_relation_count'] ?? 0));
 
-        $sum['patch_false_positive_delta'] += ($patched_false_positive - $baseline_false_positive);
+        $baseline_patch_metrics = array(
+            'false_positive_count' => (float) $baseline_false_positive,
+            'generated_field_count_delta' => (float) $baseline_generated_field_count_delta,
+            'generated_field_projection_quality' => (float) $baseline_generated_field_projection,
+            'grouped_control_projection_quality' => (float) $baseline_grouped_control_projection,
+            'approval_block_projection_quality' => (float) $baseline_approval_projection,
+            'semantic_hard_stop_generation_coverage' => (float) $baseline_semantic_hard_stop_generation,
+            'patched_graph_to_draft_consistency' => (float) $baseline_patched_to_draft_consistency,
+            'digital_twin_hint_completeness' => (float) $baseline_digital_twin_hint_completeness,
+            'builder_draft_cleanup_burden_proxy' => (float) $baseline_builder_cleanup,
+            'approval_block_structural_quality' => (float) $baseline_approval_structural,
+            'signature_endpoint_validity' => (float) $baseline_signature_endpoint_validity,
+            'group_membership_completeness' => (float) $baseline_group_membership,
+            'fillable_fixed_classification_accuracy' => (float) $baseline_fillable_fixed,
+            'sparse_critical_field_set_completeness' => (float) $baseline_sparse_critical,
+        );
+        $patched_patch_metrics = array(
+            'false_positive_count' => (float) $patched_false_positive,
+            'generated_field_count_delta' => (float) $patched_generated_field_count_delta,
+            'generated_field_projection_quality' => (float) $patched_generated_field_projection,
+            'grouped_control_projection_quality' => (float) $patched_grouped_control_projection,
+            'approval_block_projection_quality' => (float) $patched_approval_projection,
+            'semantic_hard_stop_generation_coverage' => (float) $patched_semantic_hard_stop_generation,
+            'patched_graph_to_draft_consistency' => (float) $patched_patched_to_draft_consistency,
+            'digital_twin_hint_completeness' => (float) $patched_digital_twin_hint_completeness,
+            'builder_draft_cleanup_burden_proxy' => (float) $patched_builder_cleanup,
+            'approval_block_structural_quality' => (float) $patched_approval_structural,
+            'signature_endpoint_validity' => (float) $patched_signature_endpoint_validity,
+            'group_membership_completeness' => (float) $patched_group_membership,
+            'fillable_fixed_classification_accuracy' => (float) $patched_fillable_fixed,
+            'sparse_critical_field_set_completeness' => (float) $patched_sparse_critical,
+        );
+
+        foreach (runner_patch_metric_sum_keys() as $metric_key => $sum_key) {
+            $delta_val = (float) ($patched_patch_metrics[$metric_key] ?? 0.0) - (float) ($baseline_patch_metrics[$metric_key] ?? 0.0);
+            if (isset($sum[$sum_key])) {
+                $sum[$sum_key] += $delta_val;
+            }
+        }
         $sum['patch_cleanup_delta'] += ($patched_cleanup - $baseline_cleanup);
         $sum['patch_yes_no_grouping_delta'] += ($patched_yes_no_grouping - $baseline_yes_no_grouping);
         $sum['patch_checkbox_grouping_delta'] += ($patched_checkbox_grouping - $baseline_checkbox_grouping);
         $sum['patch_signature_pairing_delta'] += ($patched_signature_pairing - $baseline_signature_pairing);
-        $sum['patch_approval_block_structural_delta'] += ($patched_approval_structural - $baseline_approval_structural);
-        $sum['patch_signature_endpoint_validity_delta'] += ($patched_signature_endpoint_validity - $baseline_signature_endpoint_validity);
-        $sum['patch_group_membership_completeness_delta'] += ($patched_group_membership - $baseline_group_membership);
-        $sum['patch_fillable_fixed_classification_delta'] += ($patched_fillable_fixed - $baseline_fillable_fixed);
         $sum['patch_relation_accuracy_by_type_delta'] += ($patched_relation_by_type - $baseline_relation_by_type);
-        $sum['patch_sparse_critical_field_set_delta'] += ($patched_sparse_critical - $baseline_sparse_critical);
         $sum['patch_canonical_relation_delta'] += ($patched_rel - $baseline_rel);
         $sum['patch_hard_stop_anchor_coverage_delta'] += ($patched_hard_stop_coverage - $baseline_hard_stop_coverage);
 
@@ -1422,7 +2093,8 @@ foreach ($cases as $case) {
             $agg['patch_evaluation']['cases_with_patch_applied']++;
         }
 
-        foreach ($patch_categories as $patch_category) {
+        $attribution_categories = $patch_primary_category !== '' ? array($patch_primary_category) : $patch_categories;
+        foreach ($attribution_categories as $patch_category) {
             if (!isset($agg['patch_evaluation']['by_category'][$patch_category])) {
                 $agg['patch_evaluation']['by_category'][$patch_category] = runner_init_patch_category_bucket();
             }
@@ -1434,12 +2106,10 @@ foreach ($cases as $case) {
             $bucket['avg_rejected_patch_items'] += $rejected_count;
 
             // Add case-level deltas directly for category rollups.
-            $bucket['avg_false_positive_count_delta'] += (float) ($patched_false_positive - $baseline_false_positive);
-            $bucket['avg_approval_block_structural_quality_delta'] += (float) ($patched_approval_structural - $baseline_approval_structural);
-            $bucket['avg_signature_endpoint_validity_delta'] += (float) ($patched_signature_endpoint_validity - $baseline_signature_endpoint_validity);
-            $bucket['avg_group_membership_completeness_delta'] += (float) ($patched_group_membership - $baseline_group_membership);
-            $bucket['avg_fillable_fixed_classification_accuracy_delta'] += (float) ($patched_fillable_fixed - $baseline_fillable_fixed);
-            $bucket['avg_sparse_critical_field_set_completeness_delta'] += (float) ($patched_sparse_critical - $baseline_sparse_critical);
+            foreach (runner_patch_metric_sum_keys() as $metric_key => $_sum_key) {
+                $avg_key = 'avg_' . $metric_key . '_delta';
+                $bucket[$avg_key] += (float) ($patched_patch_metrics[$metric_key] ?? 0.0) - (float) ($baseline_patch_metrics[$metric_key] ?? 0.0);
+            }
 
             $agg['patch_evaluation']['by_category'][$patch_category] = $bucket;
         }
@@ -1449,6 +2119,7 @@ foreach ($cases as $case) {
             'patch_applied' => !empty($patch_eval['applied']),
             'patch_primary_category' => $patch_primary_category,
             'patch_categories' => $patch_categories,
+            'patch_attribution_categories' => $attribution_categories,
             'patch_category_filter' => $filter_categories,
             'category_filter_match' => $filter_match,
             'validation' => array(
@@ -1470,6 +2141,18 @@ foreach ($cases as $case) {
                 'fillable_fixed_classification_accuracy' => $baseline_fillable_fixed,
                 'relation_accuracy_by_type' => $baseline_relation_by_type,
                 'sparse_critical_field_set_completeness' => $baseline_sparse_critical,
+                'generated_field_count_delta' => $baseline_generated_field_count_delta,
+                'generated_field_projection_quality' => $baseline_generated_field_projection,
+                'grouped_control_projection_quality' => $baseline_grouped_control_projection,
+                'approval_block_projection_quality' => $baseline_approval_projection,
+                'semantic_hard_stop_generation_coverage' => $baseline_semantic_hard_stop_generation,
+                'patched_graph_to_draft_consistency' => $baseline_patched_to_draft_consistency,
+                'digital_twin_hint_completeness' => $baseline_digital_twin_hint_completeness,
+                'builder_draft_cleanup_burden_proxy' => $baseline_builder_cleanup,
+                'draft_grouped_control_count' => max(0, (int) ($metrics['report']['draft_grouped_control_count'] ?? 0)),
+                'draft_approval_block_count' => max(0, (int) ($metrics['report']['draft_approval_block_count'] ?? 0)),
+                'draft_hard_stop_target_count' => max(0, (int) ($metrics['report']['draft_hard_stop_target_count'] ?? 0)),
+                'draft_hard_stop_rule_count' => max(0, (int) ($metrics['report']['draft_hard_stop_rule_count'] ?? 0)),
                 'canonical_relation_count' => $baseline_rel,
                 'hard_stop_anchor_coverage_proxy' => $baseline_hard_stop_coverage,
             ),
@@ -1485,6 +2168,18 @@ foreach ($cases as $case) {
                 'fillable_fixed_classification_accuracy' => $patched_fillable_fixed,
                 'relation_accuracy_by_type' => $patched_relation_by_type,
                 'sparse_critical_field_set_completeness' => $patched_sparse_critical,
+                'generated_field_count_delta' => $patched_generated_field_count_delta,
+                'generated_field_projection_quality' => $patched_generated_field_projection,
+                'grouped_control_projection_quality' => $patched_grouped_control_projection,
+                'approval_block_projection_quality' => $patched_approval_projection,
+                'semantic_hard_stop_generation_coverage' => $patched_semantic_hard_stop_generation,
+                'patched_graph_to_draft_consistency' => $patched_patched_to_draft_consistency,
+                'digital_twin_hint_completeness' => $patched_digital_twin_hint_completeness,
+                'builder_draft_cleanup_burden_proxy' => $patched_builder_cleanup,
+                'draft_grouped_control_count' => max(0, (int) ($patched_metrics['report']['draft_grouped_control_count'] ?? 0)),
+                'draft_approval_block_count' => max(0, (int) ($patched_metrics['report']['draft_approval_block_count'] ?? 0)),
+                'draft_hard_stop_target_count' => max(0, (int) ($patched_metrics['report']['draft_hard_stop_target_count'] ?? 0)),
+                'draft_hard_stop_rule_count' => max(0, (int) ($patched_metrics['report']['draft_hard_stop_rule_count'] ?? 0)),
                 'canonical_relation_count' => $patched_rel,
                 'hard_stop_anchor_coverage_proxy' => $patched_hard_stop_coverage,
             ),
@@ -1500,8 +2195,25 @@ foreach ($cases as $case) {
                 'fillable_fixed_classification_accuracy' => round($patched_fillable_fixed - $baseline_fillable_fixed, 4),
                 'relation_accuracy_by_type' => round($patched_relation_by_type - $baseline_relation_by_type, 4),
                 'sparse_critical_field_set_completeness' => round($patched_sparse_critical - $baseline_sparse_critical, 4),
+                'generated_field_count_delta' => (int) ($patched_generated_field_count_delta - $baseline_generated_field_count_delta),
+                'generated_field_projection_quality' => round($patched_generated_field_projection - $baseline_generated_field_projection, 4),
+                'grouped_control_projection_quality' => round($patched_grouped_control_projection - $baseline_grouped_control_projection, 4),
+                'approval_block_projection_quality' => round($patched_approval_projection - $baseline_approval_projection, 4),
+                'semantic_hard_stop_generation_coverage' => round($patched_semantic_hard_stop_generation - $baseline_semantic_hard_stop_generation, 4),
+                'patched_graph_to_draft_consistency' => round($patched_patched_to_draft_consistency - $baseline_patched_to_draft_consistency, 4),
+                'digital_twin_hint_completeness' => round($patched_digital_twin_hint_completeness - $baseline_digital_twin_hint_completeness, 4),
+                'builder_draft_cleanup_burden_proxy' => round($patched_builder_cleanup - $baseline_builder_cleanup, 4),
+                'draft_grouped_control_count' => (int) (max(0, (int) ($patched_metrics['report']['draft_grouped_control_count'] ?? 0)) - max(0, (int) ($metrics['report']['draft_grouped_control_count'] ?? 0))),
+                'draft_approval_block_count' => (int) (max(0, (int) ($patched_metrics['report']['draft_approval_block_count'] ?? 0)) - max(0, (int) ($metrics['report']['draft_approval_block_count'] ?? 0))),
+                'draft_hard_stop_target_count' => (int) (max(0, (int) ($patched_metrics['report']['draft_hard_stop_target_count'] ?? 0)) - max(0, (int) ($metrics['report']['draft_hard_stop_target_count'] ?? 0))),
+                'draft_hard_stop_rule_count' => (int) (max(0, (int) ($patched_metrics['report']['draft_hard_stop_rule_count'] ?? 0)) - max(0, (int) ($metrics['report']['draft_hard_stop_rule_count'] ?? 0))),
                 'canonical_relation_count' => (int) ($patched_rel - $baseline_rel),
                 'hard_stop_anchor_coverage_proxy' => round($patched_hard_stop_coverage - $baseline_hard_stop_coverage, 4),
+            ),
+            'runtime_hard_stop_qa' => array(
+                'baseline' => $baseline_runtime_qa,
+                'patched' => $patched_runtime_qa,
+                'delta' => runner_runtime_hard_stop_delta($baseline_runtime_qa, $patched_runtime_qa),
             ),
         );
     }
@@ -1532,6 +2244,14 @@ $agg['fillable_fixed_classification_accuracy'] = round($sum['fillable_fixed_clas
 $agg['relation_accuracy_by_type'] = round($sum['relation_accuracy_by_type'] / $count, 4);
 $agg['sparse_critical_field_set_completeness'] = round($sum['sparse_critical_field_set_completeness'] / $count, 4);
 $agg['review_cleanup_burden_proxy'] = round($sum['cleanup_burden'] / $count, 4);
+$agg['avg_generated_field_count_delta'] = round($sum['generated_field_count_delta'] / $count, 4);
+$agg['generated_field_projection_quality'] = round($sum['generated_field_projection_quality'] / $count, 4);
+$agg['grouped_control_projection_quality'] = round($sum['grouped_control_projection_quality'] / $count, 4);
+$agg['approval_block_projection_quality'] = round($sum['approval_block_projection_quality'] / $count, 4);
+$agg['semantic_hard_stop_generation_coverage'] = round($sum['semantic_hard_stop_generation_coverage'] / $count, 4);
+$agg['patched_graph_to_draft_consistency'] = round($sum['patched_graph_to_draft_consistency'] / $count, 4);
+$agg['digital_twin_hint_completeness'] = round($sum['digital_twin_hint_completeness'] / $count, 4);
+$agg['builder_draft_cleanup_burden_proxy'] = round($sum['builder_draft_cleanup_burden_proxy'] / $count, 4);
 $agg['canonical_graph_completeness_proxy'] = round($sum['canonical_graph_completeness'] / $count, 4);
 $agg['hard_stop_anchor_coverage_proxy'] = round($sum['hard_stop_anchor_coverage'] / $count, 4);
 $patched_case_count = max(1, (int) ($agg['patch_evaluation']['cases_with_patch'] ?? 0));
@@ -1546,6 +2266,14 @@ $agg['patch_evaluation']['avg_group_membership_completeness_delta'] = round($sum
 $agg['patch_evaluation']['avg_fillable_fixed_classification_delta'] = round($sum['patch_fillable_fixed_classification_delta'] / $patched_case_count, 4);
 $agg['patch_evaluation']['avg_relation_accuracy_by_type_delta'] = round($sum['patch_relation_accuracy_by_type_delta'] / $patched_case_count, 4);
 $agg['patch_evaluation']['avg_sparse_critical_field_set_delta'] = round($sum['patch_sparse_critical_field_set_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_generated_field_count_delta'] = round($sum['patch_generated_field_count_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_generated_field_projection_quality_delta'] = round($sum['patch_generated_field_projection_quality_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_grouped_control_projection_quality_delta'] = round($sum['patch_grouped_control_projection_quality_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_approval_block_projection_quality_delta'] = round($sum['patch_approval_block_projection_quality_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_semantic_hard_stop_generation_coverage_delta'] = round($sum['patch_semantic_hard_stop_generation_coverage_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_patched_graph_to_draft_consistency_delta'] = round($sum['patch_patched_graph_to_draft_consistency_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_digital_twin_hint_completeness_delta'] = round($sum['patch_digital_twin_hint_completeness_delta'] / $patched_case_count, 4);
+$agg['patch_evaluation']['avg_builder_draft_cleanup_burden_proxy_delta'] = round($sum['patch_builder_draft_cleanup_burden_proxy_delta'] / $patched_case_count, 4);
 $agg['patch_evaluation']['avg_canonical_relation_delta'] = round($sum['patch_canonical_relation_delta'] / $patched_case_count, 4);
 $agg['patch_evaluation']['avg_hard_stop_anchor_coverage_delta'] = round($sum['patch_hard_stop_anchor_coverage_delta'] / $patched_case_count, 4);
 $agg['patch_evaluation']['avg_rejected_patch_items'] = round($sum['patch_rejected_items'] / $patched_case_count, 4);
@@ -1562,6 +2290,8 @@ foreach ((array) ($agg['patch_evaluation']['by_category'] ?? array()) as $patch_
     $bucket['avg_rejected_patch_items'] = round(((float) ($bucket['avg_rejected_patch_items'] ?? 0.0)) / $cat_count, 4);
     $agg['patch_evaluation']['by_category'][$patch_category] = $bucket;
 }
+
+$agg['runtime_hard_stop_qa'] = runner_runtime_summary_finalize($runtime_summary);
 
 if (empty($args['json'])) {
     foreach ($case_reports as $case_report) {

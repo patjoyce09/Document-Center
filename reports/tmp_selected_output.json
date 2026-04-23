@@ -1,0 +1,143 @@
+{
+    "selected_case_metrics": {
+        "nomnc_filled_returned_002": {
+            "false_positive_count": 8,
+            "yes_no_grouping_accuracy": 1,
+            "checkbox_grouping_accuracy": 1,
+            "signature_date_pairing_accuracy": 0,
+            "review_cleanup_burden_proxy": 0,
+            "canonical_graph_completeness_proxy": 1
+        },
+        "consent_filled_returned_002": {
+            "false_positive_count": 33,
+            "yes_no_grouping_accuracy": 1,
+            "checkbox_grouping_accuracy": 1,
+            "signature_date_pairing_accuracy": 1,
+            "review_cleanup_burden_proxy": 0,
+            "canonical_graph_completeness_proxy": 1
+        },
+        "consent_filled_returned_003": {
+            "false_positive_count": 24,
+            "yes_no_grouping_accuracy": 1,
+            "checkbox_grouping_accuracy": 1,
+            "signature_date_pairing_accuracy": 1,
+            "review_cleanup_burden_proxy": 0,
+            "canonical_graph_completeness_proxy": 1
+        },
+        "packet_filled_returned_001_full": {
+            "false_positive_count": 29,
+            "yes_no_grouping_accuracy": 0,
+            "checkbox_grouping_accuracy": 0.5,
+            "signature_date_pairing_accuracy": 1,
+            "review_cleanup_burden_proxy": 0,
+            "canonical_graph_completeness_proxy": 1
+        }
+    },
+    "patch_targets": {
+        "nomnc_filled_returned_002": {
+            "signature_like_widgets": [
+                {
+                    "stable_id": "widget_widget_2",
+                    "page": 2
+                }
+            ],
+            "date_like_widgets": [],
+            "first_yes_no_or_checkbox_group": null,
+            "first_approval_block": null,
+            "paired_signature_date_relation_exists": false
+        },
+        "consent_filled_returned_002": {
+            "signature_like_widgets": [
+                {
+                    "stable_id": "widget_widget_3",
+                    "page": 1
+                },
+                {
+                    "stable_id": "widget_widget_4",
+                    "page": 1
+                }
+            ],
+            "date_like_widgets": [
+                {
+                    "stable_id": "widget_widget_35",
+                    "page": 1
+                },
+                {
+                    "stable_id": "widget_widget_13",
+                    "page": 4
+                }
+            ],
+            "first_yes_no_or_checkbox_group": {
+                "stable_id": "widget_widget_10",
+                "page": 3
+            },
+            "first_approval_block": {
+                "stable_id": "approval_1_sig_pair_2",
+                "page": 1
+            },
+            "paired_signature_date_relation_exists": true
+        },
+        "consent_filled_returned_003": {
+            "signature_like_widgets": [
+                {
+                    "stable_id": "widget_widget_2",
+                    "page": 1
+                },
+                {
+                    "stable_id": "widget_widget_3",
+                    "page": 1
+                }
+            ],
+            "date_like_widgets": [
+                {
+                    "stable_id": "widget_widget_24",
+                    "page": 1
+                },
+                {
+                    "stable_id": "widget_widget_6",
+                    "page": 2
+                }
+            ],
+            "first_yes_no_or_checkbox_group": {
+                "stable_id": "widget_widget_13",
+                "page": 3
+            },
+            "first_approval_block": {
+                "stable_id": "approval_1_sig_pair_2",
+                "page": 1
+            },
+            "paired_signature_date_relation_exists": true
+        },
+        "packet_filled_returned_001_full": {
+            "signature_like_widgets": [
+                {
+                    "stable_id": "widget_widget_3",
+                    "page": 1
+                },
+                {
+                    "stable_id": "widget_widget_4",
+                    "page": 1
+                }
+            ],
+            "date_like_widgets": [
+                {
+                    "stable_id": "widget_widget_35",
+                    "page": 1
+                },
+                {
+                    "stable_id": "widget_widget_33",
+                    "page": 1
+                }
+            ],
+            "first_yes_no_or_checkbox_group": {
+                "stable_id": "widget_widget_29",
+                "page": 3
+            },
+            "first_approval_block": {
+                "stable_id": "approval_1_sig_pair_2",
+                "page": 1
+            },
+            "paired_signature_date_relation_exists": true
+        }
+    }
+}

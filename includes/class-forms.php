@@ -49,6 +49,10 @@ final class DCB_Forms {
                 </div>
                 <p id="th-df-status" class="th-df-status" aria-live="polite"></p>
                 <ul id="th-df-errors" class="th-df-errors" hidden></ul>
+                <div id="th-df-hard-stop-preview" class="th-df-hard-stop-preview" hidden>
+                    <p class="th-df-help" style="margin:6px 0 4px;"><strong>Submission blockers</strong> — resolve these semantic hard-stop checks before submitting.</p>
+                    <ul id="th-df-hard-stop-list" class="th-df-errors"></ul>
+                </div>
             </div>
         </div>
         <?php
